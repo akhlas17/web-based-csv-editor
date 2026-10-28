@@ -1,0 +1,27 @@
+# .github/issue_templates/bug.md
+name: Bug report
+about: Something is broken, slow, or wrong
+title: ""
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: desc
+    attributes:
+      label: What happened?
+      placeholder: A clear description of the bug, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: Step-by-step, including a sample CSV or a link to one if possible.
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      placeholder: Browser + version, and which CSV file(s), roughly how big.
+    validations:
+      required: false
