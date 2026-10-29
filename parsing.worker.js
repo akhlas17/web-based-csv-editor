@@ -9,7 +9,7 @@ self.onmessage = (e) => {
   const d = e.data || {};
   try {
     if (!parseCsv) parseCsv = makeParser();
-    let rows = parseCsv(d.raw);
+    let rows = parseCsv(d.raw, detectDelim(d.raw));
     while (rows.length && rows[rows.length - 1].every((c) => c === "")) rows.pop();
 
     let headers, data, singleRow;
@@ -36,8 +36,15 @@ self.onmessage = (e) => {
   }
 };
 
+function detectDelim(text) {
+  const first = (text.split(/\r?\n/, 1)[0] || "");
+  const tabs = (first.match(/\t/g) || []).length;
+  const commas = (first.match(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/g) || []).length;
+  return tabs > commas && tabs > 0 ? "\t" : ",";
+}
+
 function makeParser() {
-  return function parse(text) {
+  return function parse(text, delim = ",") {
     const rows = [];
     let row = [];
     let field = "";
@@ -52,7 +59,7 @@ function makeParser() {
         } else { field += c; }
       } else {
         if (c === '"') inQuotes = true;
-        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === delim) { row.push(field); field = ""; }
         else if (c === "\n" || c === "\r") {
           if (c === "\r" && text[i + 1] === "\n") i++;
           row.push(field); field = "";

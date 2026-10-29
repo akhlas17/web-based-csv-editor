@@ -14,6 +14,8 @@ parsing.worker.js →  large-file parsing off the main thread
 
 That's the whole project. No `package.json`, no bundler, no dependencies.
 
+> **Live demo →** [akhlas17.github.io/web-based-csv-editor](https://akhlas17.github.io/web-based-csv-editor/)
+
 ## Get started
 
 There is nothing to install. Either open `index.html` directly in your browser,
@@ -29,19 +31,37 @@ Then open a file (or drop it onto the window) and you're editing.
 ## Features
 
 - **Open** CSV files by picking one, dragging one in, or pasting from the clipboard
-- **Edit like a spreadsheet** — click any cell, or use the keyboard:
-  - `Enter` / `Space` — start editing the selected cell
-  - `Tab` / `Shift+Tab` — edit the next / previous cell
-  - `↑` `↓` `←` `→` — move around the grid
-  - `Backspace` or `Delete` — delete the selected row
-- **Sort** any column (click the column‑header arrows)
-- **Search** across all cells, with match highlighting
-- **Add / delete** rows and columns
-- **Undo / Redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`)
+- **Edit like a spreadsheet**
+  - `Enter` / `Space` — start (or move-edit) the active cell
+  - `Tab` / `Shift+Tab` — move to the next / previous cell
+  - `↑` `↓` `←` `→` — move the active cell
+  - `Shift + ↑↓←→` — extend the selection range from the anchor (like Google Sheets)
+  - `Ctrl/Cmd+A` — select the whole grid
+  - `Backspace` / `Delete` — clear the selected cells
+  - **Save on blur** — click away, press a key, or move on; the value is never lost
+- **Selection engine** — click a cell, row number, or column header; drag to
+  multi-select; the whole grid, a row, a column, or any rectangular range
+- **Right-click context menu** — copy, paste, clear, case conversion, fill,
+  sort, auto-fit, insert/delete rows & columns, duplicate, and more
+- **Statistics bar** — live `Σ Sum` / `x̄ Average` / `min` / `max` / `n Count` for
+  the selection, with a `Σ more` menu; understands `$`, `%`, `(1,234)` negatives,
+  and dates
+- **Format** (Google-Sheets style, automatic): numbers right-align with tabular
+  figures, negatives highlight in red, dates and text align left
+- **Data tools**
+  - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
+  - Case conversion: lowercase / UPPERCASE / Title Case
+  - Find & Replace (`Ctrl/Cmd+H`) with match-case and whole-cell options
+  - Sort any column by value (numeric or text)
+  - Per-column **duplicate** and **move up / down**
+  - Add / delete rows and columns, insert above/below and left/right
+- **Layout** — resizable columns (drag the grip, double‑click to auto‑fit), widths
+  remembered per file; sticky header; light & dark themes
+- **Move safely** — **Undo / Redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`)
 - **Autosave** to `localStorage` — revisit the same grid later
-- **Export** to a `.csv` file (button, or `Ctrl/Cmd+S`)
-- **Big files stay fast** — DOM virtualization keeps the grid responsive at tens
-  of thousands of rows, and parsing runs in a Web Worker so the UI never freezes
+- **Export** to `.csv` (button, or `Ctrl/Cmd+S`)
+- **Big files stay fast** — DOM virtualization keeps the grid responsive at tens of
+  thousands of rows, and parsing runs in a Web Worker so the UI never freezes
 
 ## Try it
 

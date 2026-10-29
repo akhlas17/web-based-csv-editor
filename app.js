@@ -1,5 +1,11 @@
 /* ============ CSV Parser ============ */
-function parseCsv(text) {
+function detectDelim(text) {
+  const first = (text.split(/\r?\n/, 1)[0] || "");
+  const tabs = (first.match(/\t/g) || []).length;
+  const commas = (first.match(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/g) || []).length;
+  return tabs > commas && tabs > 0 ? "\t" : ",";
+}
+function parseCsv(text, delim = ",") {
   const rows = [];
   let row = [];
   let field = "";
@@ -14,7 +20,7 @@ function parseCsv(text) {
       } else { field += c; i++; }
     } else {
       if (c === '"') { inQuotes = true; i++; }
-      else if (c === ",") { row.push(field); field = ""; i++; }
+      else if (c === delim) { row.push(field); field = ""; i++; }
       else if (c === "\n" || c === "\r") {
         if (c === "\r" && text[i + 1] === "\n") i++;
         row.push(field); field = "";
@@ -27,16 +33,16 @@ function parseCsv(text) {
   return rows;
 }
 
-function toCsv(headers, rows) {
+function toCsv(headers, rows, delim = ",") {
   const out = [headers];
   for (const r of rows) out.push(r);
   const q = s => {
     const v = String(s);
-    return (v.includes('"') || v.includes(",") || v.includes("\n") || v.includes("\r"))
+    return (v.includes('"') || v.includes(delim) || v.includes("\n") || v.includes("\r"))
       ? '"' + v.replace(/"/g, '""') + '"'
       : v;
   };
-  return out.map(r => r.map(q).join(",")).join("\n");
+  return out.map(r => r.map(q).join(delim)).join("\n");
 }
 
 /* ============ State ============
@@ -52,6 +58,8 @@ const state = {
   searchQuery: "",
   sortCol: -1,     // -1 = none
   sortDir: 0,      // 1 asc, -1 desc
+  filters: {},     // { <colIndex>: Set<allowed values> }
+  selectedCol: -1, // keyboard/copy anchor column
   history: [],
   historyIndex: -1,
 };
@@ -73,6 +81,7 @@ const $ = id => document.getElementById(id);
 const scroller = $("scroller");
 const head = $("head");
 const body = $("body");
+const colgroup = $("colgroup");
 const empty = $("empty");
 const dragOverlay = $("dragOverlay");
 const toast = $("toast");
@@ -96,6 +105,22 @@ const modalTitle = $("modalTitle");
 const modalText = $("modalText");
 const modalCancel = $("modalCancel");
 const modalOk = $("modalOk");
+const btnTheme = $("btnTheme");
+const btnTools = $("btnTools");
+const toolsMenu = $("toolsMenu");
+const btnStats = $("btnStats");
+const filterPanelRoot = $("filterPanelRoot");
+const filterPanel = $("filterPanel");
+const filterPanelTitle = $("filterPanelTitle");
+const filterPanelSub = $("filterPanelSub");
+const filterPanelBody = $("filterPanelBody");
+const filterPanelClose = $("filterPanelClose");
+const filterPanelClear = $("filterPanelClear");
+const filterPanelApply = $("filterPanelApply");
+const exportMenu = $("exportMenu");
+const statFilters = $("statFilters");
+const statFiltersText = $("statFiltersText");
+const clearFiltersBtn = $("clearFilters");
 
 /* ============ Toast ============ */
 let toastTimer = null;
@@ -190,13 +215,41 @@ function updateUndoButtons() {
 
 /* ============ Search ============ */
 function visibleRows() {
-  if (!state.searchQuery) return state.rows.map((_, i) => i);
   const q = state.searchQuery.toLowerCase();
+  const activeCols = Object.keys(state.filters).map(Number);
+  const hasFilter = activeCols.length > 0;
+  const hasSearch = q !== "";
+  if (!hasSearch && !hasFilter) return state.rows.map((_, i) => i);
   const out = [];
   for (let i = 0; i < state.rows.length; i++) {
-    if (state.rows[i].some(c => String(c).toLowerCase().includes(q))) out.push(i);
+    const r = state.rows[i];
+    if (hasSearch && !r.some(c => String(c).toLowerCase().includes(q))) continue;
+    if (hasFilter) {
+      let ok = true;
+      for (const c of activeCols) {
+        if (!state.filters[c].has(r[c] === undefined ? "" : r[c])) { ok = false; break; }
+      }
+      if (!ok) continue;
+    }
+    out.push(i);
   }
   return out;
+}
+function hasActiveFilterSet() {
+  for (const k of Object.keys(state.filters)) {
+    if (state.filters[k].size < state.rows.length) return true;
+  }
+  return Object.keys(state.filters).length > 0;
+}
+function distinctValues(c) {
+  const s = new Set();
+  for (let i = 0; i < state.rows.length; i++) s.add(state.rows[i][c] === undefined ? "" : state.rows[i][c]);
+  return s;
+}
+function clearFilters() {
+  state.filters = {};
+  closeFilterPanel();
+  render();
 }
 
 /* ============ Sort ============ */
@@ -257,11 +310,22 @@ function renderHeader() {
   // Fixed column widths: table sizes itself to colnum(46)+addcol(34)+N*120,
   // so wide files stay readable and scroll instead of squishing to the viewport.
   if (head.parentElement) head.parentElement.style.setProperty("--grid-cols", state.headers.length);
+  syncColgroup();
   let html = "<tr><th class='colnum'>#</th>";
   for (let c = 0; c < state.headers.length; c++) {
     const isSorted = state.sortCol === c;
-    const cls = isSorted ? (state.sortDir === 1 ? "sorted-asc" : "sorted-desc") : "";
-    html += `<th class="${cls}"><div class="th-inner">
+    const isFiltered = Object.prototype.hasOwnProperty.call(state.filters, c);
+    const cls = [
+      isSorted ? (state.sortDir === 1 ? "sorted-asc" : "sorted-desc") : "",
+      isFiltered ? "has-filter" : "",
+    ].join(" ");
+    const funnel = isFiltered
+      ? "" : "opacity:.45;";
+    html += `<th class="${cls}" data-col="${c}"><div class="th-inner">
+      <button type="button" class="th-filter ${isFiltered ? "on" : ""}" style="${funnel}" data-action="filter-col" data-col="${c}" title="Filter ${esc(state.headers[c])}" aria-label="Filter ${esc(state.headers[c])}">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+      </button>
+      <div class="col-resize" data-col="${c}" title="Drag to resize · double-click to auto-fit" aria-hidden="true"></div>
       <span class="th-label">${esc(state.headers[c] || "Column " + (c + 1))}
         <svg class="sort-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path data-dir="asc" d="M18 15l-6-6-6 6"/><path data-dir="desc" d="M6 9l6 6 6-6"/>
@@ -319,7 +383,8 @@ function paintBody() {
     const parts = [];
     if (i % 2 === 1) parts.push("zebra");
     if (searching) parts.push("is-match");
-    if (i === state.selectedRow) parts.push("active-row");
+    const active = act && act.r === i;
+    if (active) parts.push("active-row");
     html += rowHtml(i, parts.join(" "));
   }
   html += `<tr class="row-add">
@@ -334,13 +399,21 @@ function paintBody() {
 
 function rowHtml(i, cls) {
   const row = state.rows[i];
-  let h = `<tr class="${cls}" data-ri="${i}"><td class="rownum">${i + 1}</td>`;
+  const rowSel = sel && sel.c1 === 0 && sel.c2 >= state.headers.length - 1 && i >= sel.r1 && i <= sel.r2;
+  let h = `<tr class="${cls}${rowSel ? " row-sel" : ""}" data-ri="${i}"><td class="rownum${rowSel ? " sel-row" : ""}">${i + 1}</td>`;
   for (let c = 0; c < state.headers.length; c++) {
     const val = row[c] !== undefined ? row[c] : "";
+    const cellSel = sel && i >= sel.r1 && i <= sel.r2 && c >= sel.c1 && c <= sel.c2;
     if (state.editingRow === i && state.editingCol === c) {
-      h += `<td class="cell editing"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
+      h += `<td class="cell editing${cellSel ? " sel-cell" : ""}" data-ri="${i}" data-c="${c}"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
     } else {
-      h += `<td class="cell" data-ri="${i}" data-c="${c}"><span class="cell-display ${val !== "" ? "" : "is-empty"}">${val === "" ? "&nbsp;" : esc(val)}</span></td>`;
+      const num = cellNumericInfo(val);
+      let cls = cellSel ? " sel-cell" : "";
+      let txtCls = "cell-display";
+      if (num.kind === "empty") txtCls += " is-empty";
+      else if (num.kind === "num") { txtCls += " is-num"; if (num.negative) cls += " is-neg"; }
+      else if (num.kind === "date") txtCls += " is-date";
+      h += `<td class="cell${cls}" data-ri="${i}" data-c="${c}"><span class="${txtCls}">${val === "" ? "&nbsp;" : esc(val)}</span></td>`;
     }
   }
   h += `<td class="rowdel"><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
@@ -391,9 +464,74 @@ function renderStats() {
   } else {
     statSearch.hidden = true;
   }
+  if (hasActiveFilterSet()) {
+    const parts = [];
+    for (const k of Object.keys(state.filters).map(Number).sort((a, b) => a - b)) {
+      const col = state.headers[k] || "Column " + (k + 1);
+      const allowed = state.filters[k];
+      const total = state.rows.length;
+      let n = 0;
+      for (let i = 0; i < total; i++) {
+        const v = state.rows[i][k] === undefined ? "" : state.rows[i][k];
+        if (allowed.has(v)) n++;
+      }
+      parts.push(`${col}: ${n}/${total}`);
+    }
+    statFiltersText.textContent = parts.join(" · ");
+    statFilters.hidden = false;
+    clearFiltersBtn.hidden = false;
+  } else {
+    statFilters.hidden = true;
+    clearFiltersBtn.hidden = true;
+  }
 }
 
 /* ============ Editing ============ */
+const isFiniteNumber = (n) => typeof n === "number" && isFinite(n);
+// Commit a single in-progress cell edit into the model. Coordinates come from
+// the input's own data-* attributes (NOT global state — by the time focusout
+// fires, the grid may already have moved on to the next cell, and we must save
+// exactly the value we just left, in exactly the cell we were editing).
+// Returns true if the edit actually belonged to us and was applied.
+function commitCellInput(input) {
+  if (!input || !input.classList || !input.classList.contains("cell-input")) return false;
+  const ri = +input.dataset.ri, c = +input.dataset.c;
+  if (!isFiniteNumber(ri) || !isFiniteNumber(c)) return false;
+  if (ri < 0 || ri >= state.rows.length) return false;
+  const val = input.value;
+  if (state.rows[ri][c] !== val) {
+    state.rows[ri][c] = val;
+    markDirty();
+    pushHistory();
+  }
+  if (state.editingRow === ri && state.editingCol === c) {
+    state.editingRow = -1;
+    state.editingCol = -1;
+  }
+  return true;
+}
+// Save-on-blur: the ONE reliable commit-on-dismiss path. Works whether the
+// editor is closed by Enter, Tab, Arrow, clicking another cell, clicking a
+// toolbar button, or the window losing focus — the browser's standard
+// blur behavior fires focusout on the input, and we save its current value.
+document.addEventListener("focusout", (e) => {
+  if (commitCellInput(e.target)) render();
+});
+// Programmatic commit (keyboard handler, toolbar actions). If the input is
+// focused, blur it so the focusout handler performs the commit + render;
+// otherwise close the editor and render ourselves.
+function commitEditing() {
+  if (state.editingRow < 0) return;
+  const input = document.querySelector("td.cell.editing .cell-input");
+  if (input && document.activeElement === input) {
+    input.blur();            // focusout → commitCellInput → render (single path)
+  } else {
+    if (input) commitCellInput(input);
+    state.editingRow = -1;
+    state.editingCol = -1;
+    render();
+  }
+}
 function startEdit(ri, c) {
   if (ri < 0 || ri >= state.rows.length) return;
   state.editingRow = ri;
@@ -405,24 +543,6 @@ function stopEdit() {
   state.editingRow = -1;
   state.editingCol = -1;
 }
-// Commit the active cell editor into the model. Reads the current input value,
-// records history only if the value actually changed, then clears the editor.
-function commitEditing() {
-  if (state.editingRow < 0) return;
-  const ri = state.editingRow, c = state.editingCol;
-  let val = state.rows[ri][c];
-  const active = document.activeElement;
-  if (active && active.classList && active.classList.contains("cell-input")) {
-    val = active.value;
-  }
-  state.editingRow = -1;
-  state.editingCol = -1;
-  if (val !== state.rows[ri][c]) {
-    state.rows[ri][c] = val;
-    markDirty();
-    pushHistory();
-  }
-}
 function commitEdit(down) {
   if (state.editingRow < 0) { render(); return; }
   const ri = state.editingRow;
@@ -431,28 +551,78 @@ function commitEdit(down) {
   render();
 }
 
-/* ============ Body clicks ============ */
+/* ============ Body clicks + drag-selection ============ */
+// Single-click selects; double-click edits; shift-click extends the range.
+let dragStart = null;
+let dragMoved = false;
+function cellFromEvent(e) {
+  const cell = e.target.closest && e.target.closest("td.cell");
+  if (!cell) return null;
+  return { r: +cell.dataset.ri, c: +cell.dataset.c };
+}
+function colFromX(clientX) {
+  const left = scroller.getBoundingClientRect().left + scroller.scrollLeft;
+  let x = clientX - left - 46; // skip the 46px colnum gutter
+  let c = 0;
+  for (; c < state.headers.length && x > 0; c++) x -= (colWidths[c] || DEFAULT_COL_W);
+  return Math.max(0, Math.min(state.headers.length - 1, c - 1));
+}
+body.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest(".rowdel-btn") || e.target.closest('[data-action="del-row"]') || e.target.closest('[data-action="add-row"]')) return;
+  // We call preventDefault below (to stop native text selection during a drag),
+  // which suppresses the input's native blur. So commit any in-progress edit
+  // here, before focusout has a chance to fire, to make "type then click away"
+  // actually save.
+  if (state.editingRow >= 0) {
+    const input = document.querySelector("td.cell.editing .cell-input");
+    if (input) commitCellInput(input);
+  }
+  const cc = cellFromEvent(e);
+  if (cc) {
+    dragStart = cc;
+    dragMoved = false;
+    if (e.shiftKey) extendSel(cc.r, cc.c);
+    else setSel(cc.r, cc.c);
+    state.selectedRow = sel.r1;
+    e.preventDefault(); // prevent native text selection during drag
+    return;
+  }
+  const rownum = e.target.closest("td.rownum");
+  const rowEl = rownum ? rownum.closest("tr[data-ri]") : null;
+  if (rowEl) {
+    const r = +rowEl.dataset.ri;
+    if (e.shiftKey && sel) extendSel(r, isMulti() ? sel.c2 : sel.c1);
+    else setSelRow(r);
+  }
+});
+document.addEventListener("mousemove", (e) => {
+  if (!dragStart) return;
+  if (e.buttons !== 1) return;
+  const sc = scroller.getBoundingClientRect();
+  if (e.clientY < sc.top || e.clientY > sc.bottom) return;
+  const rowIdx = Math.floor((e.clientY - sc.top + scroller.scrollTop - 34) / ROW_H);
+  const r = Math.max(0, Math.min(state.rows.length - 1, rowIdx));
+  const col = colFromX(e.clientX);
+  if (r !== dragStart.r || col !== dragStart.c) dragMoved = true;
+  if (dragMoved) extendSel(r, col);
+});
+document.addEventListener("mouseup", () => { dragStart = null; });
+
+body.addEventListener("dblclick", (e) => {
+  const cc = cellFromEvent(e);
+  if (!cc) return;
+  if (state.editingRow >= 0) commitEditing();
+  setSel(cc.r, cc.c);
+  startEdit(cc.r, cc.c);
+});
+
 body.addEventListener("click", (e) => {
   const del = e.target.closest('[data-action="del-row"]');
-  if (del) {
-    if (state.editingRow >= 0) commitEditing();
-    deleteRow(parseInt(del.dataset.ri, 10));
-    return;
-  }
+  if (del) { if (state.editingRow >= 0) commitEditing(); deleteRow(parseInt(del.dataset.ri, 10)); return; }
   const add = e.target.closest('[data-action="add-row"]');
-  if (add) {
-    if (state.editingRow >= 0) commitEditing();
-    addRow();
-    return;
-  }
-  const cell = e.target.closest("td.cell");
-  if (cell) {
-    if (state.editingRow >= 0) commitEditing();
-    startEdit(parseInt(cell.dataset.ri, 10), parseInt(cell.dataset.c, 10));
-    return;
-  }
-  const rownum = e.target.closest("td.rownum[data-ri]");
-  if (rownum && document.activeElement !== document.body) state.selectedRow = parseInt(rownum.dataset.ri, 10);
+  if (add) { if (state.editingRow >= 0) commitEditing(); addRow(); return; }
+  // single-click on a cell is now handled by mousedown (select) / dblclick (edit)
 });
 // Start a new edit when clicking into the header/gutter while an editor is open.
 document.addEventListener("mousedown", (e) => {
@@ -462,82 +632,88 @@ document.addEventListener("mousedown", (e) => {
   render();
 });
 
-/* ============ Keyboard ============ */
-document.addEventListener("keydown", (e) => {
-  const editingInput = document.activeElement && document.activeElement.classList &&
-                       document.activeElement.classList.contains("cell-input");
-
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
-    e.preventDefault();
-    if (e.shiftKey) redo(); else undo();
-    return;
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    exportCsv();
-    return;
-  }
-  if (editingInput) {
-    const ri = state.editingRow, c = state.editingCol;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitEdit(false);
-      if (ri < state.rows.length - 1) startEdit(ri + 1, c);
+/* ============ Keyboard ============
+   Kept small & modular: global shortcuts first, then per-mode handlers. */
+function isCellInput(el) {
+  return el && el.classList && el.classList.contains("cell-input");
+}
+function arrowDelta(key) {
+  if (key === "ArrowUp") return [-1, 0];
+  if (key === "ArrowDown") return [1, 0];
+  if (key === "ArrowLeft") return [0, -1];
+  if (key === "ArrowRight") return [0, 1];
+  return null;
+}
+function handleEditingKey(e) {
+  const ri = state.editingRow, c = state.editingCol;
+  if (e.key === "Enter") {
+    e.preventDefault(); commitEdit(false);
+    if (ri < state.rows.length - 1) startEdit(ri + 1, c); else render();
+  } else if (e.key === "Escape") {
+    e.preventDefault(); state.editingRow = -1; state.editingCol = -1; render();
+  } else if (e.key === "Tab") {
+    e.preventDefault(); commitEditing();
+    if (e.shiftKey) {
+      if (c > 0) startEdit(ri, c - 1);
+      else if (ri > 0) startEdit(ri - 1, state.headers.length - 1);
       else render();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      state.editingRow = -1; state.editingCol = -1;
-      render();
-    } else if (e.key === "Tab") {
-      e.preventDefault();
-      commitEditing();
-      if (e.shiftKey) {
-        if (c > 0) startEdit(ri, c - 1);
-        else if (ri > 0) startEdit(ri - 1, state.headers.length - 1);
-        else render();
-      } else {
-        if (c < state.headers.length - 1) startEdit(ri, c + 1);
-        else if (ri < state.rows.length - 1) startEdit(ri + 1, 0);
-        else render();
-      }
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault(); commitEdit(false); if (ri < state.rows.length - 1) startEdit(ri + 1, c);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault(); commitEdit(false); if (ri > 0) startEdit(ri - 1, c);
+    } else {
+      if (c < state.headers.length - 1) startEdit(ri, c + 1);
+      else if (ri < state.rows.length - 1) startEdit(ri + 1, 0);
+      else render();
     }
-    return;
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault(); commitEdit(false); if (ri < state.rows.length - 1) startEdit(ri + 1, c);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault(); commitEdit(false); if (ri > 0) startEdit(ri - 1, c);
   }
-
-  // not editing
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+}
+function selectWholeGrid() {
+  setSel(0, 0);
+  selAnchor = { r: 0, c: 0 };
+  const d = maxDims();
+  extendSel(d.r, d.c);
+}
+function handleGridKey(e) {
   if (document.activeElement === searchInput) return;
-
-  const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", " ", "Backspace", "Delete"];
-  if (!keys.includes(e.key)) return;
-  e.preventDefault();
-
-  if (e.key === "Backspace" || e.key === "Delete") {
-    if (state.selectedRow >= 0) {
-      const ri = state.selectedRow;
-      deleteRow(ri);
-      state.selectedRow = Math.max(0, Math.min(ri, state.rows.length - 1));
-      render();
-    }
+  const arrow = arrowDelta(e.key);
+  if (arrow) {
+    e.preventDefault();
+    if (state.rows.length === 0) return;
+    nudgeActive(arrow[0], arrow[1], e.shiftKey); // Shift+arrow extends the range
     return;
   }
-  if (state.rows.length === 0) {
-    if (e.key === "Enter" || e.key === " ") addRow();
-    return;
-  }
-  if (state.selectedRow < 0) state.selectedRow = 0;
-  if (e.key === "ArrowDown") state.selectedRow = Math.min(state.rows.length - 1, state.selectedRow + 1);
-  else if (e.key === "ArrowUp") state.selectedRow = Math.max(0, state.selectedRow - 1);
-  if (e.key === "ArrowUp" || e.key === "ArrowDown") { render(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "Enter" || e.key === " ") {
-    const c = state.editingCol >= 0 ? state.editingCol : 0;
-    startEdit(state.selectedRow, c);
+    if (state.rows.length === 0) { e.preventDefault(); addRow(); return; }
+    e.preventDefault();
+    const a = activeCell() || (sel ? { r: sel.r2, c: sel.c2 } : { r: 0, c: 0 });
+    startEdit(a.r, a.c);
     return;
   }
+  if (e.key === "Backspace" || e.key === "Delete") {
+    e.preventDefault();
+    if (sel) clearSelectionCells();
+    return;
+  }
+}
+document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  const k = e.key.toLowerCase();
+  if (mod && !e.altKey && k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && k === "s") { e.preventDefault(); exportCsv(); return; }
+  if (mod && k === "c" && sel) { e.preventDefault(); copySelectionRange(); return; }
+  if (mod && !e.shiftKey && k === "d") { e.preventDefault(); fillDown(); return; }
+  if (mod && e.shiftKey && k === "r") { e.preventDefault(); fillRight(); return; }
+  if (mod && k === "a") { e.preventDefault(); selectWholeGrid(); return; }
+  if (e.key === "Escape") {
+    if (isCellInput(document.activeElement)) { state.editingRow = -1; state.editingCol = -1; render(); }
+    else if (sel) { e.preventDefault(); clearSel(); }
+    hideCtxMenu();
+    return;
+  }
+  if (isCellInput(document.activeElement)) { handleEditingKey(e); return; }
+  handleGridKey(e);
 });
 
 /* ============ Row / column ops ============ */
@@ -574,6 +750,7 @@ function deleteRow(ri) {
 function addColumn() {
   state.headers.push("Column " + (state.headers.length + 1));
   for (const r of state.rows) { while (r.length < state.headers.length) r.push(""); }
+  colWidths.push(DEFAULT_COL_W);
   markDirty();
   pushHistory();
   render();
@@ -585,8 +762,10 @@ function deleteColumn(c) {
     "Removes this column from every row. Undo is available after.", () => {
       state.headers.splice(c, 1);
       for (const r of state.rows) r.splice(c, 1);
+      colWidths.splice(c, 1);
       if (state.sortCol === c) { state.sortCol = -1; state.sortDir = 0; }
       else if (state.sortCol > c) state.sortCol--;
+      remapFiltersAfterColRemoval(c);
       markDirty();
       pushHistory();
       render();
@@ -601,16 +780,16 @@ head.addEventListener("click", (e) => {
     const a = btn.dataset.action, c = parseInt(btn.dataset.col, 10);
     if (a === "add-col") addColumn();
     else if (a === "del-col") deleteColumn(c);
+    else if (a === "filter-col") { openFilterPanel(c); return; }
     else if (a === "sort-asc") { state.sortCol = c; state.sortDir = 1; applySort(); pushHistory(); render(); }
     else if (a === "sort-desc") { state.sortCol = c; state.sortDir = -1; applySort(); pushHistory(); render(); }
     return;
   }
-  const th = e.target.closest("th");
+  const th = e.target.closest("th[data-col]");
   if (!th) return;
-  const cells = head.querySelectorAll("tr > th");
-  let idx = Array.prototype.indexOf.call(cells, th);
-  if (idx <= 0 || idx > state.headers.length) return; // gutter or add-col header
-  toggleSort(idx - 1);
+  const c = parseInt(th.dataset.col, 10);
+  setSelCol(c);                 // single click selects the whole column; double-click auto-fits (handled elsewhere)
+  state.selectedRow = sel.r1;
 });
 
 /* ============ Search ============ */
@@ -648,11 +827,14 @@ function resetState(keepFilename) {
   state.sortCol = -1;
   state.sortDir = 0;
   state.searchQuery = "";
+  state.filters = {};
+  state.selectedCol = -1;
   searchInput.value = "";
   searchClear.hidden = true;
   state.history = [];
   state.historyIndex = -1;
   if (!keepFilename) filenameInput.value = "untitled";
+  applyStoredWidths();
   // every resetState() call is a fresh load -> grid matches source, not dirty
   isSaved = true;
   updateDirty();
@@ -662,7 +844,7 @@ function resetState(keepFilename) {
 /* Parse + normalise, always succeeds or throws. Works on the main thread (and
    is duplicated inside parsing.worker.js so large files don't block the UI). */
 function parseText(text) {
-  const rows = parseCsv(text);
+  const rows = parseCsv(text, detectDelim(text));
   while (rows.length && rows[rows.length - 1].every(c => c === "")) rows.pop();
   if (!rows.length) return { headers: ["Column 1"], data: [[""]] };
   let maxC = 0;
@@ -735,10 +917,1102 @@ function readFileAsText(file) {
   });
 }
 
+/* ============ Column filters ============ */
+let filterCol = -1;
+
+function remapFiltersAfterColRemoval(removed) {
+  const next = {};
+  for (const k of Object.keys(state.filters)) {
+    const n = Number(k);
+    if (n === removed) continue;
+    const m = n > removed ? n - 1 : n;
+    next[m] = state.filters[k];
+  }
+  state.filters = next;
+}
+
+function openFilterPanel(c) {
+  filterCol = c;
+  const colHeader = state.headers[c] || ("Column " + (c + 1));
+  filterPanelTitle.textContent = `Filter · ${colHeader}`;
+  const total = state.rows.length;
+  const values = distinctValues(c);
+  const currentAllowed = state.filters[c];
+  const entries = [];
+  for (const [val, n] of valueCounts(c)) {
+    entries.push({ val, n, checked: !currentAllowed || currentAllowed.has(val) });
+  }
+  entries.sort((a, b) => (a.n !== b.n) ? a.n - b.n
+           : String(a.val).localeCompare(String(b.val), undefined, { numeric: true }));
+  filterPanelSub.textContent = `${values.size} distinct value${values.size === 1 ? "" : "s"} · ${total} row${total === 1 ? "" : "s"}`;
+  const MAX = 1000;
+  const shown = entries.slice(0, MAX);
+  filterPanelBody.innerHTML = shown.map(e => {
+    const label = e.val === "" ? '<span class="dim">(empty)</span>' : esc(e.val);
+    const count = `<span class="dim">(${e.n})</span>`;
+    return `<label class="filter-item">
+      <input type="checkbox" value="${escAttr(e.val)}" ${e.checked ? "checked" : ""}/>
+      <span class="filter-value">${label}</span> ${count}
+    </label>`;
+  }).join("");
+  if (entries.length > MAX) {
+    filterPanelBody.innerHTML += `<div class="filter-truncate">Showing first ${MAX} of ${entries.length} distinct values (least frequent first). Use the search box to find a specific value.</div>`;
+  }
+  // Position the panel above & near the button (or center if no button).
+  filterPanelRoot.hidden = false;
+  const panel = filterPanel;
+  const w = panel.offsetWidth, h = panel.offsetHeight;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let left = Math.max(12, Math.min(vw - w - 12, (vw - w) / 2));
+  let top = Math.max(12, Math.min(vh - h - 12, (vh - h) / 2));
+  const btn = document.querySelector(`th .th-filter[data-col="${c}"]`);
+  if (btn) {
+    const r = btn.getBoundingClientRect();
+    left = Math.max(12, Math.min(vw - w - 12, r.left + (r.right - r.left) / 2 - w / 2));
+    top = Math.min(vh - h - 12, r.bottom + 8);
+  }
+  panel.style.left = left + "px";
+  panel.style.top = top + "px";
+}
+function closeFilterPanel() {
+  filterPanelRoot.hidden = true;
+  filterCol = -1;
+}
+function valueCounts(c) {
+  const m = new Map();
+  for (let i = 0; i < state.rows.length; i++) {
+    const v = state.rows[i][c] === undefined ? "" : state.rows[i][c];
+    m.set(v, (m.get(v) || 0) + 1);
+  }
+  return [...m.entries()];
+}
+function applyFilterFromPanel() {
+  if (filterCol < 0) return;
+  const boxes = [...filterPanelBody.querySelectorAll('input[type=checkbox]')];
+  const total = boxes.length;
+  const checked = boxes.filter(b => b.checked).length;
+  if (checked === total) {
+    delete state.filters[filterCol]; // everything selected = no filter
+  } else {
+    state.filters[filterCol] = new Set(boxes.filter(b => b.checked).map(b => b.value));
+  }
+  closeFilterPanel();
+  stopEdit();
+  render();
+  showToast(checked === total ? "Filter cleared" : "Filter applied");
+}
+filterPanelApply.addEventListener("click", applyFilterFromPanel);
+filterPanelClose.addEventListener("click", closeFilterPanel);
+filterPanelRoot.addEventListener("click", (e) => { if (e.target === filterPanelRoot) closeFilterPanel(); });
+filterPanelClear.addEventListener("click", () => {
+  if (filterCol < 0) return;
+  const name = state.headers[filterCol] || ("Column " + (filterCol + 1));
+  delete state.filters[filterCol];
+  closeFilterPanel();
+  stopEdit();
+  render();
+  showToast(`Cleared filter on "${name}"`);
+});
+clearFiltersBtn.addEventListener("click", clearFilters);
+statFilters.addEventListener("click", () => {
+  const c = Object.keys(state.filters).map(Number).sort((a, b) => a - b)[0];
+  if (c === undefined) return;
+  openFilterPanel(c);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !filterPanelRoot.hidden) closeFilterPanel();
+});
+
+/* ============ Tools menu (data cleaning) ============ */
+function toggleMenu(el, menu) {
+  const willOpen = menu.hidden;
+  // close any open
+  document.querySelectorAll(".popover").forEach(m => { m.hidden = true; });
+  document.querySelectorAll("[aria-haspopup=menu][aria-expanded='true']").forEach(b => b.setAttribute("aria-expanded", "false"));
+  if (!willOpen) return;
+  // Un-hide FIRST so offsetWidth/offsetHeight are real (measuring a
+  // display:none element returns 0 and mis-positioned the menu).
+  menu.hidden = false;
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  const r = el.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Google/Sheets pattern: left-aligned to the anchor; if it would overflow
+  // the right edge, flip to right-aligned. Never overflow the viewport.
+  let left = r.left;
+  if (left + w > vw - 8) left = Math.max(8, r.right - w);
+  left = Math.max(8, left);
+  let top = r.bottom + 8;
+  if (top + h > vh - 8) top = Math.max(8, r.top - h - 8);
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+  el.setAttribute("aria-expanded", "true");
+}
+btnTools.addEventListener("click", (e) => { e.preventDefault(); toggleMenu(btnTools, toolsMenu); });
+const btnExportMenu = $("btnExportMenu");
+btnExportMenu.addEventListener("click", (e) => { e.preventDefault(); toggleMenu(btnExportMenu, exportMenu); });
+btnExport.addEventListener("click", exportCsv);
+document.addEventListener("click", (e) => {
+  const menu = document.querySelectorAll(".popover:not([hidden])");
+  for (const m of menu) {
+    if (m.contains(e.target)) continue;
+    const b = document.querySelector('[aria-haspopup=menu][aria-expanded="true"]');
+    if (b && b.contains(e.target)) continue;
+    m.hidden = true;
+    if (b) b.setAttribute("aria-expanded", "false");
+  }
+});
+toolsMenu.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-tool]");
+  if (!btn) return;
+  toolsMenu.hidden = true;
+  const tool = btn.dataset.tool;
+  if (tool === "trim") toolTrim();
+  else if (tool === "dedupe") toolDedupe();
+  else if (tool === "empty-rows") toolEmptyRows();
+  else if (tool === "empty-cols") toolEmptyCols();
+});
+/* ============ Fill (productivity) ============
+   Fill down: every row in the selection becomes a copy of the top row's cells.
+   Fill right: every column in the selection becomes a copy of the left col's
+   cells. Single-cell selection is a no-op (nothing to fill). */
+function fillDown() {
+  if (!sel || sel.r2 === sel.r1) { showToast("Select 2+ rows to fill down", "error"); return; }
+  const top = state.rows[sel.r1];
+  for (let r = sel.r2; r >= sel.r1 + 1; r--) {
+    state.rows[r] = state.rows[r].slice();
+    for (let c = sel.c1; c <= sel.c2; c++) state.rows[r][c] = top[c];
+  }
+  markDirty(); pushHistory(); render();
+  showToast(`Filled ${sel.r2 - sel.r1} row(s) down`);
+}
+function fillRight() {
+  if (!sel || sel.c2 === sel.c1) { showToast("Select 2+ columns to fill right", "error"); return; }
+  for (let r = sel.r1; r <= sel.r2; r++) {
+    const v = state.rows[r][sel.c1];
+    for (let c = sel.c2; c >= sel.c1 + 1; c--) state.rows[r][c] = v;
+  }
+  markDirty(); pushHistory(); render();
+  showToast(`Filled ${sel.c2 - sel.c1} column(s) right`);
+}
+
+/* ============ Case conversion (productivity) ============ */
+function applyCase(kind) {
+  if (!sel) { showToast("Select cells first", "error"); return; }
+  const list = selCellList();
+  if (!list.length) return;
+  const n = list.length;
+  for (const [r, c] of list) {
+    const s = state.rows[r][c] == null ? "" : String(state.rows[r][c]);
+    if (s === "") continue;
+    if (kind === "lower") state.rows[r][c] = s.toLowerCase();
+    else if (kind === "upper") state.rows[r][c] = s.toUpperCase();
+    else if (kind === "title") state.rows[r][c] = s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  }
+  markDirty(); pushHistory(); render();
+  const label = kind === "lower" ? "lowercase" : kind === "upper" ? "UPPERCASE" : "Title Case";
+  showToast(`Converted ${n} cell${n === 1 ? "" : "s"} to ${label}`);
+}
+exportMenu.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-delim]");
+  if (!btn) return;
+  exportMenu.hidden = true;
+  exportWithDelim(btn.dataset.delim);
+});
+
+function toolTrim() {
+  let n = 0;
+  for (const r of state.rows) for (let c = 0; c < r.length; c++) {
+    const before = r[c];
+    const after = String(before).trim();
+    if (after !== before) { r[c] = after; n++; }
+  }
+  if (!n) { showToast("No cells needed trimming"); return; }
+  markDirty(); pushHistory(); render();
+  showToast(`Trimmed ${n} cell${n === 1 ? "" : "s"}`);
+}
+function toolDedupe() {
+  const seen = new Set();
+  const keep = [];
+  for (const r of state.rows) {
+    const key = r.join("\u001f");
+    if (seen.has(key)) continue;
+    seen.add(key); keep.push(r);
+  }
+  const removed = state.rows.length - keep.length;
+  if (!removed) { showToast("No duplicate rows found"); return; }
+  state.rows = keep;
+  markDirty(); pushHistory(); render();
+  showToast(`Removed ${removed} duplicate row${removed === 1 ? "" : "s"}`);
+}
+function toolEmptyRows() {
+  const before = state.rows.length;
+  state.rows = state.rows.filter(r => r.some(c => String(c).trim() !== ""));
+  const removed = before - state.rows.length;
+  if (!removed) { showToast("No empty rows found"); return; }
+  markDirty(); pushHistory(); remapFiltersAfterColRemoval(-1); render();
+  showToast(`Removed ${removed} empty row${removed === 1 ? "" : "s"}`);
+}
+function toolEmptyCols() {
+  const before = state.headers.length;
+  const keepIdx = [];
+  for (let c = 0; c < state.headers.length; c++) {
+    const any = state.rows.some(r => String(r[c] ?? "").trim() !== "");
+    if (any) keepIdx.push(c);
+  }
+  const removed = before - keepIdx.length;
+  if (!removed) { showToast("No empty columns found"); return; }
+  state.headers = keepIdx.map(i => state.headers[i]);
+  state.rows = state.rows.map(r => keepIdx.map(i => r[i] ?? ""));
+  state.sortCol = -1; state.sortDir = 0;
+  state.filters = {};
+  markDirty(); pushHistory(); render();
+  showToast(`Removed ${removed} empty column${removed === 1 ? "" : "s"}`);
+}
+
+/* ============ "Select & Σ" button: select whole grid so the stats bar shows ============
+   (The old per-column stats modal was superseded by the status-bar selection stats.) */
+btnStats.addEventListener("click", () => {
+  if (!state.rows.length) { showToast("No rows to select", "error"); return; }
+  setSel(0, 0);
+  extendSel(state.rows.length - 1, state.headers.length - 1);
+  scroller.scrollTop = 0;
+  paintBody();
+  showToast("Whole grid selected — stats on the right");
+});
+
+/* ============ Find & Replace =======
+   Ctrl+H opens the modal. Match operates on every cell within the current
+   selection (whole grid if none). "Replace" hits only the first match;
+   "Replace all" hits every match in the region. Escape closes. */
+const findRoot     = $("findRoot");
+const findInput    = $("findInput");
+const replaceInput = $("replaceInput");
+const findCase     = $("findCase");
+const findWhole    = $("findWhole");
+const findMeta     = $("findMeta");
+const findReplace  = $("findReplace");
+const findReplaceAll = $("findReplaceAll");
+const findFind     = $("findFind");
+const findCancel   = $("findCancel");
+let findCursor = null; // [row, col, offset] of the *next* match to jump to
+
+function openFind() {
+  if (!state.rows.length) { showToast("No data to search", "error"); return; }
+  findRoot.hidden = false;
+  findInput.focus();
+  findInput.select();
+  findCursor = null;
+  updateFindMeta();
+}
+function closeFind() {
+  findRoot.hidden = true;
+  findInput.value = replaceInput.value = "";
+  findCase.checked = findWhole.checked = false;
+  findCursor = null;
+  findMeta.textContent = "Search in the selection or whole grid";
+}
+function updateFindMeta() {
+  const region = sel || { r1: 0, r2: state.rows.length - 1, c1: 0, c2: state.headers.length - 1, __all: true };
+  const cells = (region.r2 - region.r1 + 1) * (region.c2 - region.c1 + 1);
+  findMeta.textContent = `Search ${cells} cell${cells === 1 ? "" : "s"} in ${sel ? "selection" : "the whole grid"}`;
+}
+function escapeReg(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function matchPredicate(q) {
+  const flags = findCase.checked ? "" : "i";
+  const re  = new RegExp(escapeReg(q), flags);
+  const reW = findWhole.checked ? new RegExp("^" + escapeReg(q) + "$", flags) : re;
+  return (cellv) => reW.test(String(cellv ?? ""));
+}
+// Apply the replacement to a single cell's value. Whole-cell mode replaces the
+// entire value only if it matches exactly; otherwise substitute all occurrences
+// of the search term (respecting the match-case option).
+function replaceInCell(cell, q, rep) {
+  const s = String(cell ?? "");
+  const flags = findCase.checked ? "" : "i";
+  if (findWhole.checked) {
+    return new RegExp("^" + escapeReg(q) + "$", flags).test(s) ? rep : s;
+  }
+  return s.replace(new RegExp(escapeReg(q), flags + "g"), rep);
+}
+function findNext() {
+  const q = findInput.value;
+  if (!q) return showToast("Nothing to find", "error");
+  const region = sel || { r1: 0, r2: state.rows.length - 1, c1: 0, c2: state.headers.length - 1, __all: true };
+  const pred = matchPredicate(q);
+  // search from findCursor.next, then loop back to region start
+  const startR = findCursor ? findCursor[0] : region.r1;
+  const startC = findCursor ? findCursor[1] : region.c1;
+  for (let r = startR; r <= region.r2; r++) {
+    for (let c = (r === startR ? startC : region.c1); c <= region.c2; c++) {
+      if (pred(state.rows[r][c])) { findCursor = [r, c, 0]; setSel(r, c); scrollIntoViewCell(r, c); return showToast(`Match at row ${r + 1}, col ${c + 1}`); }
+    }
+  }
+  showToast("No more matches", "error");
+}
+function doReplace(all) {
+  const q = findInput.value;
+  if (!q) return showToast("Nothing to replace", "error");
+  const rep = replaceInput.value;
+  const region = sel || { r1: 0, r2: state.rows.length - 1, c1: 0, c2: state.headers.length - 1 };
+  const pred = matchPredicate(q);
+  if (!all) {
+    if (!findCursor) return showToast("Find a match first", "error");
+    const [r, c] = findCursor;
+    state.rows[r][c] = replaceInCell(state.rows[r][c], q, rep);
+    markDirty(); pushHistory(); render();
+    showToast("Replaced 1 match");
+    findCursor = null;
+    return;
+  }
+  let n = 0;
+  for (let r = region.r1; r <= region.r2; r++) for (let c = region.c1; c <= region.c2; c++) {
+    const before = state.rows[r][c];
+    const after = replaceInCell(before, q, rep);
+    if (after !== before && pred(before)) { state.rows[r][c] = after; n++; }
+  }
+  if (!n) return showToast("No matches", "error");
+  markDirty(); pushHistory(); render();
+  showToast(`Replaced ${n} match${n === 1 ? "" : "es"}`);
+}
+function scrollIntoViewCell(r, c) {
+  const sc = scroller.getBoundingClientRect();
+  const top = r * ROW_H;
+  if (top < scroller.scrollTop) scroller.scrollTop = top;
+  else if (top + ROW_H > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top + ROW_H - scroller.clientHeight;
+}
+const btnFind = $("btnFind");
+btnFind && btnFind.addEventListener("click", () => findRoot.hidden ? openFind() : (findInput.focus(), findInput.select()));
+findFind.addEventListener("click", () => { findNext(); findInput.focus(); findInput.select(); });
+findReplace.addEventListener("click", () => doReplace(false));
+findReplaceAll.addEventListener("click", () => doReplace(true));
+findCancel.addEventListener("click", closeFind);
+findRoot.addEventListener("click", (e) => { if (e.target === findRoot) closeFind(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !findRoot.hidden) { e.preventDefault(); closeFind(); return; }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "h") {
+    e.preventDefault(); findRoot.hidden ? openFind() : (findInput.focus(), findInput.select());
+  }
+});
+
+/* ============ Clipboard: copy row (Ctrl+C) / paste block (native paste event) ============ */
+// PASTE (Ctrl+V in the grid): the native `paste` event carries the clipboard
+// text and is the robust, permission-free path (works on every real browser and
+// in tests). The Ctrl+V keydown is a fallback for when no element is focused
+// (focus the grid so the paste event lands), reading the clipboard directly.
+document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod || e.altKey || e.shiftKey) return;
+  const k = e.key.toLowerCase();
+  if (k !== "c" && k !== "v") return;
+  const ae = document.activeElement;
+  const inCell = ae && ae.classList && ae.classList.contains("cell-input");
+  if (ae === searchInput) return;
+  if (k === "v") {
+    if (inCell) return; // let the cell editor take the paste
+    e.preventDefault();
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText()
+        .then(t => { if (t && t.length) pasteCells(t); else showToast("Clipboard is empty", "error"); })
+        .catch(() => showToast("Clipboard blocked — allow clipboard access", "error"));
+    } else {
+      showToast("Press Paste inside the grid to paste", "error");
+    }
+    return;
+  }
+  if (k === "c") {
+    if (inCell) return; // let the browser copy the cell's selected text
+    e.preventDefault();
+    // Copy the current selection (range if extended, else the active row).
+    if (sel && (sel.r2 > sel.r1 || sel.c2 > sel.c1 || (isFullRowSpan()))) copySelectionRange();
+    else copyActiveRow();
+  }
+});
+// Native paste handler — fires on real Ctrl+V and on synthetic ClipboardEvent.
+scroller.addEventListener("paste", (e) => {
+  const ae = document.activeElement;
+  const inCell = ae && ae.classList && ae.classList.contains("cell-input");
+  if (inCell || ae === searchInput) return; // let the field handle it
+  const text = e.clipboardData && e.clipboardData.getData("text/plain");
+  if (text && text.length) {
+    e.preventDefault();
+    pasteCells(text);
+  }
+});
+function copyActiveRow() {
+  if (state.rows.length === 0) { showToast("Nothing to copy", "error"); return; }
+  const r = Math.max(0, Math.min(state.selectedRow, state.rows.length - 1));
+  const rowTsv = state.rows[r].map(v => String(v === undefined ? "" : v)).join("\t");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(rowTsv)
+      .then(() => showToast(`Row ${r + 1} copied to clipboard`))
+      .catch(() => { fallbackCopy(rowTsv); showToast("Row copied"); });
+  } else {
+    fallbackCopy(rowTsv); showToast("Row copied");
+  }
+}
+function fallbackCopy(text) {
+  // Legacy path for browsers without the async clipboard API.
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (_) {}
+  ta.remove();
+}
+function pasteCells(text) {
+  if (!text || !text.trim()) { showToast("Clipboard is empty", "error"); return; }
+  if (!state.rows.length) {
+    confirmAction("Paste from clipboard?", "Creates a grid from the pasted text.", () => loadText(text, undefined));
+    return;
+  }
+  if (state.rows.some(r => r.some(c => c !== ""))) {
+    confirmAction("Paste into grid?", "Pastes TSV/CSV block over the current grid (first row = header).", () => loadText(text, filenameInput.value));
+    return;
+  }
+  loadText(text, filenameInput.value);
+}
+
+/* ============ Theme ============ */
+function applyTheme(mode) {
+  document.documentElement.setAttribute("data-theme", mode);
+  try { localStorage.setItem("tabula:theme", mode); } catch (_) {}
+}
+btnTheme.addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || "light";
+  applyTheme(cur === "dark" ? "light" : "dark");
+});
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem("tabula:theme"); } catch (_) {}
+  if (saved) applyTheme(saved);
+  else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) applyTheme("dark");
+  else applyTheme("light");
+})();
+
+/* ============ Column widths (resize + auto-fit + persist) ============ */
+/* ============ Selection (Sheets-style) ============================ */
+// A normalized rectangle of cells plus an "active cell" (the one the cursor
+// is on). `selAnchor` is the fixed origin used to grow the range with
+// Shift+arrows; the active cell is the opposite corner that moves.
+let sel = null;            // {r1, r2, c1, c2} normalized (inclusive)
+let selAnchor = null;      // {r, c} fixed origin for extension
+let act = null;            // {r, c} active/primary cell
+function normSel(a, b) {
+  return { r1: Math.min(a.r, b.r), r2: Math.max(a.r, b.r), c1: Math.min(a.c, b.c), c2: Math.max(a.c, b.c) };
+}
+function maxDims() { return { r: state.rows.length - 1, c: state.headers.length - 1 }; }
+function setSel(r, c) {
+  r = Math.max(0, Math.min(r, maxDims().r)); c = Math.max(0, Math.min(c, maxDims().c));
+  selAnchor = { r, c }; act = { r, c }; sel = normSel({ r, c }, { r, c });
+  state.selectedRow = r; updateSelection();
+}
+function setSelRow(r) {
+  const c = maxDims().c; r = Math.max(0, Math.min(r, maxDims().r));
+  selAnchor = { r, c: 0 }; act = { r, c }; sel = normSel({ r, c: 0 }, { r, c });
+  state.selectedRow = r; updateSelection();
+}
+function setSelCol(c) {
+  const r = maxDims().r; c = Math.max(0, Math.min(c, maxDims().c));
+  selAnchor = { r: 0, c }; act = { r, c }; sel = normSel({ r: 0, c }, { r, c });
+  state.selectedRow = r; updateSelection();
+}
+function extendSel(r, c) {
+  if (!selAnchor) { selAnchor = { r, c }; }
+  act = { r, c };
+  sel = normSel(selAnchor, { r, c });
+  state.selectedRow = r; updateSelection();
+}
+function clearSel() { sel = null; selAnchor = null; act = null; paintedSel = "none"; updateSelection(); }
+function isMulti() { return sel && (sel.r2 > sel.r1 || sel.c2 > sel.c1); }
+function isFullRowSpan() { return sel && sel.c1 === 0 && sel.c2 >= state.headers.length - 1; }
+function isFullColSpan() { return sel && sel.r1 === 0 && sel.r2 >= state.rows.length - 1; }
+function activeCell() {
+  return act || (sel ? { r: sel.r2, c: sel.c2 } : null);
+}
+function selCellList() {
+  if (!sel) return [];
+  const a = [];
+  for (let r = sel.r1; r <= sel.r2; r++) for (let c = sel.c1; c <= sel.c2; c++) a.push([r, c]);
+  return a;
+}
+// Shift+arrow / arrow navigation operate on the active cell; Shift grows the
+// range outward from the anchor, plain arrows move the single active cell.
+function nudgeActive(dr, dc, extend) {
+  if (!sel) { setSel(0, 0); act = { r: 0, c: 0 }; }
+  if (!act) act = { r: sel.r2, c: sel.c2 };
+  const d = maxDims();
+  const nr = Math.max(0, Math.min(d.r, act.r + dr));
+  const nc = Math.max(0, Math.min(d.c, act.c + dc));
+  if (extend) {
+    selAnchor = selAnchor || act;         // first Shift+arrow pins the anchor
+    act = { r: nr, c: nc };
+    sel = normSel(selAnchor, act);
+    state.selectedRow = act.r;
+    updateSelection();
+  } else {
+    setSel(nr, nc);
+  }
+  scrollCellIntoView(act.r, act.c);
+}
+function scrollCellIntoView(r, c) {
+  const sc = scroller.getBoundingClientRect();
+  const top = r * ROW_H, bottom = (r + 1) * ROW_H;
+  if (top < scroller.scrollTop) scroller.scrollTop = top;
+  else if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
+  const left = 46 + Array.from({ length: c }, (_, i) => colWidths[i] || DEFAULT_COL_W).reduce((a, b) => a + b, 0);
+  const right = left + (colWidths[c] || DEFAULT_COL_W);
+  if (left < 46 + scroller.scrollLeft) scroller.scrollLeft = Math.max(0, left - 46);
+  else if (right > scroller.scrollLeft + scroller.clientWidth - 34) scroller.scrollLeft = right - scroller.clientWidth + 34;
+}
+function computeStats(r1, c1, r2, c2) {
+  let count = 0, sum = 0, min = Infinity, max = -Infinity, numCount = 0, empty = 0, nonNum = 0, dateCount = 0;
+  const parseNum = (s) => {
+    // (1,234) → -1234;  1,234.56 → 1234.56;  25% → 25;  $12.5 → 12.5
+    let t = s.trim();
+    let neg = false;
+    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
+    if (t.endsWith("%")) { t = t.slice(0, -1); }
+    t = t.replace(/[^0-9.-]/g, "");
+    if (t === "" || t === "-" || t === ".") return NaN;
+    const n = Number(t);
+    if (!isFinite(n)) return NaN;
+    return neg ? -n : n;
+  };
+  const dateRe = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$/;
+  for (let r = r1; r <= r2; r++) {
+    const row = state.rows[r]; if (!row) continue;
+    for (let c = c1; c <= c2; c++) {
+      const v = row[c]; const s = v === undefined ? "" : String(v).trim();
+      count++;
+      if (s === "") { empty++; continue; }
+      if (dateRe.test(s)) { dateCount++; continue; }
+      const n = parseNum(s);
+      if (isFinite(n)) { numCount++; sum += n; if (n < min) min = n; if (n > max) max = n; }
+      else nonNum++;
+    }
+  }
+  const has = numCount > 0;
+  return { count, numCount, empty, nonNum, dateCount, sum, avg: has ? sum / numCount : 0, min: has ? min : null, max: has ? max : null };
+}
+function fmtStat(x) {
+  if (x === null || x === undefined || !isFinite(x)) return "—";
+  if (Number.isInteger(x)) return x.toLocaleString();
+  return x.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+// Classify a cell's value for Google-Sheets-style conditional formatting:
+// numbers right-align & tabular, negatives highlight, dates left-align.
+function cellNumericInfo(v) {
+  if (v === undefined || v === null) return { kind: "text" };
+  const s = String(v).trim();
+  if (s === "") return { kind: "empty" };
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$/.test(s)) return { kind: "date" };
+  // Strings containing letters (e.g. "abc123", "SKU-1") are text, not numbers —
+  // Google Sheets left-aligns them. Only pure numeric content is eligible below.
+  if (/[a-z]/i.test(s)) return { kind: "text" };
+  let neg = false;
+  let t = s;
+  if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }   // (1,234) → -1234
+  if (t.endsWith("%")) t = t.slice(0, -1);
+  t = t.replace(/[^0-9.-]/g, "");
+  if (t === "" || t === "-" || t === ".") return { kind: "text" };
+  const n = Number(t);
+  if (!isFinite(n)) return { kind: "text" };
+  return { kind: "num", value: neg ? -n : n, negative: neg || n < 0 };
+}
+function inSelection(r, c) { return sel && r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2; }
+function computeStatsFull() { return sel ? computeStats(sel.r1, sel.c1, sel.r2, sel.c2) : null; }
+// Selection classes are baked into the DOM by `rowHtml`/`renderHeader` at
+// paint time. `updateSelection()` decides *when* to repaint (only when the
+// selection bounds actually changed) so a drag that hovers within the same
+// row does not trigger a redundant DOM rebuild.
+let paintedSel = null;
+const selKey = (s) => (s ? s.r1 + "," + s.r2 + "," + s.c1 + "," + s.c2 : "none");
+function paintSelection() {
+  if (windowState) paintBody();
+  refreshHeaderSel();
+}
+function refreshHeaderSel() {
+  if (!head) return;
+  const fullCol = sel && sel.r1 === 0 && sel.r2 >= state.rows.length - 1;
+  for (const th of head.querySelectorAll("th[data-col]")) {
+    const c = +th.dataset.col;
+    th.classList.toggle("col-sel", !!(fullCol && c >= sel.c1 && c <= sel.c2));
+  }
+}
+function updateSelection() {
+  const key = selKey(sel);
+  if (paintedSel !== key) {
+    paintedSel = key;
+    paintSelection();
+  } else {
+    refreshHeaderSel();
+  }
+  updateSelStats();
+}
+function updateSelStats() {
+  const el = $("selStats"); if (!el) return;
+  if (!sel) { el.hidden = true; el.innerHTML = ""; return; }
+  const st = computeStats(sel.r1, sel.c1, sel.r2, sel.c2);
+  el.hidden = false;
+  const multi = isMulti();
+  let html = `<span class="sel-n">${st.count} cell${st.count === 1 ? "" : "s"}</span>`;
+  if (st.numCount > 0) {
+    html +=
+      `<span class="sel-item" data-fn="sum" title="Sum (click to copy)">Σ ${fmtStat(st.sum)}</span>` +
+      `<span class="sel-item" data-fn="avg" title="Average (click to copy)">x̄ ${fmtStat(st.avg)}</span>` +
+      `<span class="sel-item" data-fn="min" title="Minimum (click to copy)">min ${fmtStat(st.min)}</span>` +
+      `<span class="sel-item" data-fn="max" title="Maximum (click to copy)">max ${fmtStat(st.max)}</span>`;
+  }
+  html += `<span class="sel-item" data-fn="count" title="Count (click to copy)">n ${st.count}</span>`;
+  if (st.numCount > 0) html += `<button class="sel-sigma" id="selSigma" type="button" title="Compute / copy a statistic">Σ more</button>`;
+  if (multi) html += `<button class="sel-act" id="selClear" type="button" title="Clear all selected cells">Clear cells</button>`;
+  if (isFullRowSpan()) html += `<button class="sel-act danger" id="selDelRows" type="button" title="Delete all selected rows">Delete ${sel.r2 - sel.r1 + 1} rows</button>`;
+  el.innerHTML = html;
+  // wire chips
+  el.querySelectorAll(".sel-item").forEach(ch => ch.addEventListener("click", () => {
+    const v = computeStats(sel.r1, sel.c1, sel.r2, sel.c2);
+    const map = { sum: v.sum, avg: v.avg, min: v.min, max: v.max, count: v.count };
+    writeClipboard(String(map[ch.dataset.fn]))
+      .then(() => showToast(`${ch.dataset.fn.toUpperCase()} = ${fmtStat(map[ch.dataset.fn])} copied`))
+      .catch(() => showToast("Copy blocked", "error"));
+  }));
+  const sum = el.querySelector("#selSigma");
+  if (sum) sum.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(sum, $("sigmaMenu")); });
+  const cl = el.querySelector("#selClear");
+  if (cl) cl.addEventListener("click", (e) => { e.stopPropagation(); clearSelectionCells(); });
+  const dr = el.querySelector("#selDelRows");
+  if (dr) dr.addEventListener("click", (e) => { e.stopPropagation(); deleteSelectedRows(); });
+}
+function writeClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (_) {}
+  ta.remove();
+  return Promise.resolve();
+}
+function copySelectionRange() {
+  if (!sel) return false;
+  const lines = [];
+  for (let r = sel.r1; r <= sel.r2; r++) {
+    lines.push(state.rows[r].slice(sel.c1, sel.c2 + 1).map(v => String(v === undefined ? "" : v)).join("\t"));
+  }
+  writeClipboard(lines.join("\n"))
+    .then(() => showToast(`Selected range copied (${lines.length} row${lines.length === 1 ? "" : "s"})`))
+    .catch(() => showToast("Copy blocked", "error"));
+  return true;
+}
+function clearSelectionCells() {
+  const list = selCellList();
+  if (!list.length) return;
+  for (const [r, c] of list) state.rows[r][c] = "";
+  markDirty(); pushHistory(); render();
+  showToast(`Cleared ${list.length} cell${list.length === 1 ? "" : "s"}`);
+}
+function deleteSelectedRows() {
+  if (!sel) return;
+  const set = new Set(); for (let r = sel.r1; r <= sel.r2; r++) set.add(r);
+  const n = set.size;
+  confirmAction(`Delete ${n} row${n === 1 ? "" : "s"}?`, "Permanently removed from the grid. Undo is available after.", () => {
+    state.rows = state.rows.filter((_, i) => !set.has(i));
+    state.selectedRow = Math.max(0, Math.min(state.selectedRow, state.rows.length - 1));
+    clearSel();
+    markDirty(); pushHistory(); render();
+    showToast(`Deleted ${n} row${n === 1 ? "" : "s"}`);
+  });
+}
+function selectedRangeTsv() {
+  if (!sel) return null;
+  const lines = [];
+  for (let r = sel.r1; r <= sel.r2; r++) {
+    lines.push(state.rows[r].slice(sel.c1, sel.c2 + 1).map(v => String(v === undefined ? "" : v)).join("\t"));
+  }
+  return lines.join("\n");
+}
+
+/* ============ Column widths (resize + auto-fit + persist) ============ */
+const DEFAULT_COL_W = 120;
+const MIN_COL_W  = 60;
+const MAX_COL_W  = 800;
+const WS_KEY     = "tabula:widths:v1";
+let colWidths = [];
+// The CSS width `max(100%, …)` would stretch the table to the viewport and,
+// under `table-layout: fixed`, distribute that surplus across every column,
+// overriding explicit <col> widths. Google-Sheets instead sizes the grid to
+// exactly the sum of its columns (blank canvas beyond). We replicate that by
+// forcing the table's inline width to the true column sum in both rebuild and
+// per-frame updates.
+function applyTableWidth() {
+  const table = document.querySelector("table.grid");
+  if (!table) return;
+  const sum = 46 + 34 + colWidths.reduce((a, b) => a + (b || 0), 0);
+  table.style.width = sum + "px";
+  table.style.minWidth = "0";
+}
+// Full rebuild — only when the *number* of columns changes (load / add / delete).
+function syncColgroup() {
+  if (!colgroup) return;
+  const n = state.headers.length;
+  while (colWidths.length < n) colWidths.push(DEFAULT_COL_W);
+  if (colWidths.length > n) colWidths = colWidths.slice(0, n);
+  let h = `<col style="width:46px">`;
+  for (let c = 0; c < n; c++) h += `<col style="width:${Math.round(colWidths[c])}px">`;
+  h += `<col style="width:34px">`;
+  colgroup.innerHTML = h;
+  applyTableWidth();
+}
+// O(1) width update — touch only the single <col> plus the table width (both
+// constant-time). This is what runs per-frame during a drag, so a 50k-row grid
+// stays fluid: no innerHTML rebuild, no full-column reflow storm.
+function setColWidth(c, w) {
+  if (!colgroup) return;
+  const col = colgroup.children[1 + c]; // skip the 46px colnum gutter
+  if (col) col.style.width = Math.round(w) + "px";
+  colWidths[c] = w;
+  applyTableWidth();
+}
+function persistWidths() {
+  try {
+    const store = JSON.parse(localStorage.getItem(WS_KEY) || "{}");
+    const key = (filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
+    if (key) store[key] = colWidths.concat();
+    localStorage.setItem(WS_KEY, JSON.stringify(store));
+  } catch (_) {}
+}
+function applyStoredWidths() {
+  try {
+    const store = JSON.parse(localStorage.getItem(WS_KEY) || "{}");
+    const key = (filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
+    const saved = store && store[key];
+    if (saved && Array.isArray(saved)) {
+      const n = state.headers.length;
+      for (let i = 0; i < n; i++) if (saved[i] && isFinite(saved[i])) colWidths[i] = saved[i];
+    }
+  } catch (_) {}
+  syncColgroup();
+}
+syncColgroup();
+
+function autofitColumn(c) {
+  if (c < 0 || c >= state.headers.length) return;
+  let w = 0;
+  const getProbe = (() => {
+    let p = null;
+    return () => {
+      if (!p) {
+        p = document.createElement("span");
+        p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;padding:0 11px;box-sizing:content-box;";
+        p.style.font = "13px/1.45 " + (getComputedStyle(document.body).fontFamily || "inherit");
+        document.body.appendChild(p);
+      }
+      return p;
+    };
+  })();
+  const measure = (txt) => {
+    const probe = getProbe();
+    probe.textContent = txt || " ";
+    return probe.offsetWidth;
+  };
+  w = Math.max(w, measure(state.headers[c] || ("Column " + (c + 1))));
+  const SAMPLE = 60;
+  const step = Math.max(1, Math.floor(state.rows.length / SAMPLE));
+  for (let i = 0; i < state.rows.length; i += step) {
+    const v = state.rows[i][c];
+    if (v === undefined || v === "") continue;
+    w = Math.max(w, measure(String(v)));
+  }
+  colWidths[c] = Math.max(MIN_COL_W, Math.min(MAX_COL_W, w + 18));
+  setColWidth(c, colWidths[c]);
+}
+
+let resizing = null;
+let resizeRAF = 0;
+document.addEventListener("mousedown", (e) => {
+  const grip = e.target.closest(".col-resize");
+  if (!grip) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const c = parseInt(grip.dataset.col, 10);
+  if (!isFinite(c)) return;
+  const startW = colWidths[c] || DEFAULT_COL_W;
+  const startX = e.clientX;
+  resizing = { col: c, startW, startX };
+  document.body.classList.add("user-select-none");
+  const onMove = (ev) => {
+    if (!resizing) return;
+    const delta = ev.clientX - resizing.startX;
+    const w = Math.max(MIN_COL_W, Math.min(MAX_COL_W, resizing.startW + delta));
+    colWidths[resizing.col] = w;
+    // Throttle to one DOM write per animation frame and touch only this <col>.
+    if (resizeRAF) return;
+    resizeRAF = requestAnimationFrame(() => {
+      resizeRAF = 0;
+      if (resizing) setColWidth(resizing.col, colWidths[resizing.col]);
+    });
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove, true);
+    window.removeEventListener("mouseup", onUp, true);
+    window.removeEventListener("blur", onUp, true);
+    document.body.classList.remove("user-select-none");
+    if (Math.round(colWidths[resizing.col]) !== Math.round(resizing.startW)) persistWidths();
+    resizing = null;
+  };
+  window.addEventListener("mousemove", onMove, true);
+  window.addEventListener("mouseup", onUp, true);
+  window.addEventListener("blur", onUp, true);
+}, false);
+
+// double-click → auto-fit (skip sort toggle)
+head.addEventListener("dblclick", (e) => {
+  const grip = e.target.closest(".col-resize");
+  if (!grip) return;
+  e.preventDefault(); e.stopPropagation();
+  const c = parseInt(grip.dataset.col, 10);
+  if (!isFinite(c)) return;
+  autofitColumn(c);
+  persistWidths();
+});
+
+/* ============ Context menu (right-click) ============
+   A custom in-app menu. It augments — never replaces — the OS menu, since
+   we can't fully suppress the browser context menu portably anyway. The
+   menu appears at the cursor and dismisses on scroll / click-outside / Esc.
+   All actions are context-aware (cell vs. row vs. column) so the same menu
+   works whether you right-click one cell, a range, a row number, or a
+   column header. */
+const Ctx = (() => {
+  const el = $("ctxMenu");
+
+  const actions = {
+    copy:     { label: "Copy",        kbd: "⌘C",  run: () => copySelectionRange() },
+    paste:    { label: "Paste",       kbd: "⌘V",  run: pasteFromClipboard },
+    clear:    { label: "Clear cells", kbd: "⌫",   run: clearSelectionCells },
+    insRow:   { label: "Insert row above",   run: insertRowAbove },
+    insRowB:  { label: "Insert row below",   run: insertRowBelow },
+    dupRow:   { label: "Duplicate row(s)",   run: () => { duplicateRow(); } },
+    moveUp:   { label: "Move row up",        run: () => { moveRow(-1); } },
+    moveDn:   { label: "Move row down",      run: () => { moveRow(1); } },
+    insCol:   { label: "Insert column left", run: insertColLeft },
+    insColR:  { label: "Insert column right",run: insertColRight },
+    delRow:   { label: "Delete row(s)", danger: true, run: deleteSelectedRows },
+    delCol:   { label: "Delete column", danger: true, run: deleteSelectedColumns },
+    fillDown: { label: "Fill down", kbd: "⌘D", run: fillDown },
+    fillRight:{ label: "Fill right", kbd: "⌘⇧R", run: fillRight },
+    caseLower:{ label: "Lowercase", run: () => applyCase("lower") },
+    caseUpper:{ label: "UPPERCASE", run: () => applyCase("upper") },
+    caseTitle:{ label: "Title Case", run: () => applyCase("title") },
+    sortAsc:  { label: "Sort A → Z", run: () => sortSelColumn(1) },
+    sortDesc: { label: "Sort Z → A", run: () => sortSelColumn(-1) },
+    autofit:  { label: "Auto-fit column",   run: () => autofitColumn(ctxCol()) },
+  };
+
+  const ctxCol = () => (state.ctx && state.ctx.c !== undefined ? state.ctx.c : (act ? act.c : -1));
+
+  function addBtn(id, labelOverride) {
+    const a = actions[id]; if (!a) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    if (a.danger) btn.className = "danger";
+    const span = document.createElement("span");
+    span.textContent = labelOverride || a.label;
+    btn.appendChild(span);
+    if (a.kbd) { const k = document.createElement("kbd"); k.textContent = a.kbd; btn.appendChild(k); }
+    btn.addEventListener("click", () => { hide(); a.run(); });
+    el.appendChild(btn);
+  }
+  function addSep() { const d = document.createElement("div"); d.className = "ctx-sep"; el.appendChild(d); }
+
+  function buildMenu(kinds) {
+    el.innerHTML = "";
+    if (kinds.includes("cell")) {
+      addBtn("copy"); addBtn("paste"); addBtn("clear"); addSep();
+      addBtn("caseLower"); addBtn("caseUpper"); addBtn("caseTitle"); addSep();
+      addBtn("fillDown"); addBtn("fillRight"); addSep();
+      addBtn("sortAsc"); addBtn("sortDesc"); addBtn("autofit"); addSep();
+      addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
+      addBtn("insCol"); addBtn("insColR");
+      addBtn("delRow"); addBtn("delCol");
+    } else if (kinds.includes("row")) {
+      addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
+      addBtn("delRow");
+    } else if (kinds.includes("col")) {
+      addBtn("insCol"); addBtn("insColR"); addBtn("sortAsc"); addBtn("sortDesc"); addBtn("autofit"); addBtn("delCol");
+    } else {
+      addBtn("copy"); addBtn("paste"); addSep(); addBtn("insRow"); addBtn("insCol");
+    }
+  }
+
+  function show(x, y, kinds, target) {
+    state.ctx = target || null;
+    buildMenu(kinds);
+    el.hidden = true;      // reset so offsetWidth/Height are real
+    el.hidden = false;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    el.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+    el.style.top  = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
+  }
+  function hide() { el.hidden = true; state.ctx = null; }
+
+  document.addEventListener("mousedown", (e) => {
+    if (!el.hidden && !el.contains(e.target)) hide();
+  }, true);
+  scroller.addEventListener("scroll", hide, { passive: true });
+  window.addEventListener("blur", hide);
+
+  document.addEventListener("contextmenu", (e) => {
+    if (!state.rows.length) return;
+    if (e.target.closest && e.target.closest("button, input, select, textarea")) return;
+    const closestEl = (sel) => e.target.closest && e.target.closest(sel);
+    const inHead = closestEl("#head");
+    const rownum = closestEl("td.rownum");
+    const inRowdel = closestEl("td.rowdel");
+    const cell = closestEl("td.cell");
+    let kinds, target = null;
+    if (inHead) {
+      const th = closestEl("th[data-col]");
+      if (!th) return;                              // gutter / add-col: use browser menu
+      e.preventDefault();
+      kinds = ["col"]; target = { c: +th.dataset.col, r: 0 };
+    } else if (rownum) {
+      const tr = rownum.closest("tr[data-ri]");     // index lives on the <tr>
+      if (!tr) return;
+      e.preventDefault();
+      kinds = ["row"]; target = { r: +tr.dataset.ri, c: 0 };
+    } else if (inRowdel) {
+      const tr = inRowdel.closest("tr[data-ri]");
+      if (!tr) return;
+      e.preventDefault();
+      kinds = ["row"]; target = { r: +tr.dataset.ri, c: 0 };
+    } else if (cell) {
+      e.preventDefault();
+      const r = +cell.dataset.ri, c = +cell.dataset.c;
+      ensureSelAt(r, c);
+      kinds = ["cell"]; target = { r, c };
+    } else {
+      return;                                       // empty area: leave the browser menu
+    }
+    show(e.clientX, e.clientY, kinds, target);
+  });
+
+  return { hide };
+})();
+function hideCtxMenu() { if (Ctx.hide) Ctx.hide(); }
+
+/* ---- context-menu insertion helpers (kept local to module above? no —
+   these touch shared model, so they live here for discoverability) -------- */
+function insertRowAbove() {
+  const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : 0);
+  state.rows.splice(r, 0, new Array(state.headers.length).fill(""));
+  markDirty(); pushHistory(); render();
+  setSel(r, sel ? sel.c1 : 0);
+  showToast("Row inserted");
+}
+function insertRowBelow() {
+  const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : state.rows.length - 1);
+  state.rows.splice(r + 1, 0, new Array(state.headers.length).fill(""));
+  markDirty(); pushHistory(); render();
+  setSel(r + 1, sel ? sel.c1 : 0);
+  showToast("Row inserted");
+}
+// Duplicate every row in the active selection (or the row under the cursor).
+function duplicateRow() {
+  const top = sel && isFullRowSpan() ? sel.r1 : (state.ctx && state.ctx.r !== undefined ? state.ctx.r : (act ? act.r : -1));
+  const bot = sel && isFullRowSpan() ? sel.r2 : top;
+  if (top < 0 || bot < 0 || top >= state.rows.length) return;
+  const copies = [];
+  for (let r = top; r <= bot; r++) copies.push(state.rows[r].slice());
+  state.rows.splice(bot + 1, 0, ...copies);
+  markDirty(); pushHistory(); render();
+  setSel(bot + 1, sel ? sel.c1 : 0);
+  showToast(copies.length + " " + (copies.length === 1 ? "row" : "rows") + " duplicated");
+}
+// Move a row (or the whole selected block) one step up or down.
+function moveRow(dir) {
+  const top = sel && isFullRowSpan() ? sel.r1 : (state.ctx && state.ctx.r !== undefined ? state.ctx.r : (act ? act.r : -1));
+  const bot = sel && isFullRowSpan() ? sel.r2 : top;
+  if (top < 0 || bot < 0 || top >= state.rows.length) return;
+  if (dir < 0 && top === 0) { showToast("Already at top"); return; }
+  if (dir > 0 && bot >= state.rows.length - 1) { showToast("Already at bottom"); return; }
+  const block = state.rows.slice(top, bot + 1);
+  state.rows.splice(top, bot - top + 1);
+  const target = dir < 0 ? top - 1 : bot + 1;
+  state.rows.splice(target, 0, ...block);
+  markDirty(); pushHistory(); render();
+  setSel(dir < 0 ? top - 1 : bot + 1, sel ? sel.c1 : 0);
+}
+function insertColLeft() {
+  const c = (state.ctx && state.ctx.c !== undefined) ? state.ctx.c : (act ? act.c : 0);
+  insertCol(c, "Column " + (c + 1));
+}
+function insertColRight() {
+  const c = (state.ctx && state.ctx.c !== undefined) ? state.ctx.c : (act ? act.c : state.headers.length - 1);
+  insertCol(c + 1, "Column " + (c + 2));
+}
+function insertCol(at, name) {
+  state.headers.splice(at, 0, name);
+  for (const r of state.rows) { r.splice(at, 0, ""); }
+  colWidths.splice(at, 0, DEFAULT_COL_W);
+  markDirty(); pushHistory(); render();
+  showToast("Column inserted");
+}
+function deleteSelectedColumns() {
+  if (!sel) return;
+  const set = new Set(); for (let c = sel.c1; c <= sel.c2; c++) set.add(c);
+  const names = [...set].map(c => state.headers[c] || "Column " + (c + 1)).join(", ");
+  confirmAction(`Delete ${set.size} column${set.size === 1 ? "" : "s"}? (${names})`,
+    "Removes from every row. Undo is available after.", () => {
+      state.headers = state.headers.filter((_, i) => !set.has(i));
+      state.rows = state.rows.map(r => r.filter((_, i) => !set.has(i)));
+      colWidths = colWidths.filter((_, i) => !set.has(i));
+      markDirty(); pushHistory(); render();
+      showToast(`Deleted ${set.size} column${set.size === 1 ? "" : "s"}`);
+    });
+}
+function sortSelColumn(dir) {
+  const c = (state.ctx && state.ctx.c !== undefined) ? state.ctx.c
+          : (act ? act.c : (sel ? sel.c1 : 0));
+  state.sortCol = c; state.sortDir = dir;
+  applySort(); pushHistory(); render();
+  showToast(`Sorted by "${state.headers[c] || "Column " + (c + 1)}" (dir ${dir > 0 ? "asc" : "desc"})`);
+}
+function pasteFromClipboard() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    showToast("Clipboard read blocked by browser", "error"); return;
+  }
+  navigator.clipboard.readText()
+    .then(t => { if (t && t.length) pasteCells(t); else showToast("Clipboard is empty", "error"); })
+    .catch(() => showToast("Clipboard read blocked", "error"));
+}
+function ensureSelAt(r, c) {
+  if (!sel) { setSel(r, c); return; }
+  if (inSelection(r, c)) return;
+  setSel(r, c);
+}
+
 /* ============ Buttons ============ */
+const sigmaMenu = $("sigmaMenu");
+sigmaMenu.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-sigma]");
+  if (!btn) return;
+  const fn = btn.dataset.sigma;
+  sigmaMenu.hidden = true;
+  if (!sel) { showToast("Select cells first", "error"); return; }
+  const st = computeStats(sel.r1, sel.c1, sel.r2, sel.c2);
+  const map = { sum: st.sum, avg: st.avg, min: st.min, max: st.max, count: st.count };
+  if (fn === "clear") { clearSelectionCells(); return; }
+  if (fn === "delrows") { deleteSelectedRows(); return; }
+  writeClipboard(String(map[fn]))
+    .then(() => showToast(`${fn.toUpperCase()} = ${fmtStat(map[fn])} copied`))
+    .catch(() => showToast("Copy blocked", "error"));
+});
 btnUndo.addEventListener("click", undo);
 btnRedo.addEventListener("click", redo);
-btnExport.addEventListener("click", exportCsv);
 btnSample.addEventListener("click", loadSample);
 btnEmptyOpen.addEventListener("click", () => fileInput.click());
 
@@ -788,22 +2062,25 @@ dropzone.addEventListener("drop", (e) => {
 });
 
 /* ============ Export ============ */
-function exportCsv() {
+function exportWithDelim(kind) {
+  const delim = kind === "semicolon" ? ";" : kind === "tab" ? "\t" : ",";
+  const ext = kind === "tab" ? "tsv" : "csv";
   if (state.rows.length === 0 && state.headers.length === 0) { showToast("Nothing to export", "error"); return; }
-  const csv = toCsv(state.headers, state.rows);
+  const csv = toCsv(state.headers, state.rows, delim);
   const name = (filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
-  const blob = new Blob([csv + "\n"], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([csv + "\n"], { type: kind === "tab" ? "text/tab-separated-values;charset=utf-8" : "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = name + ".csv";
+  a.download = name + "." + ext;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   markSaved();
-  showToast(`Exported ${name}.csv`);
+  showToast(`Exported ${name}.${ext}`);
 }
+function exportCsv() { exportWithDelim("comma"); }
 
 /* ============ Sample data ============ */
 function loadSample() {
@@ -848,3 +2125,26 @@ modalRoot.addEventListener("click", (e) => { if (e.target === modalRoot) { modal
 /* ============ Init ============ */
 updateUndoButtons();
 if (!loadFromLocal()) loadSample();
+
+// Expose a small, stable API for Playwright / programmatic tests and the console.
+// The UI never calls these — they exist purely for external inspection/driving.
+Object.defineProperty(window, "__tabula", {
+  configurable: true,
+  value: {
+    state,
+    get sel() { return sel; },
+    get active() { return act; },
+    setSel, setSelRow, setSelCol, extendSel, clearSel,
+    selectWholeGrid, activeCell, isMulti,
+    computeStats,
+    cellNumericInfo,
+    loadSample,
+    fillDown, fillRight, applyCase,
+    findNext, doReplace, openFind, closeFind,
+    addRow, addColumn, deleteRow, deleteColumn,
+    duplicateRow, moveRow,
+    clearSelectionCells, deleteSelectedRows,
+    undo, redo,
+  },
+  enumerable: true,
+});

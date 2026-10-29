@@ -35,14 +35,29 @@
       </div>
 
       <div class="top-actions">
+        <button id="btnTheme" class="btn icon-btn" title="Toggle dark mode" type="button" aria-label="Toggle dark mode">
+          <svg class="ico-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="ico-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
         <label class="btn" title="Open a .csv file from disk">
           Open
           <input id="fileInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" hidden />
         </label>
-        <button id="btnExport" class="btn btn-primary" title="Download as CSV (Ctrl+S)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span>Export</span>
-        </button>
+        <div class="export-wrap">
+          <button id="btnExport" class="btn btn-primary" title="Download as CSV (Ctrl+S)" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Export</span>
+          </button>
+          <button id="btnExportMenu" class="btn btn-primary caret" title="More export formats" type="button" aria-haspopup="menu" aria-expanded="false">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div id="exportMenu" class="popover" hidden role="menu" aria-label="Export format">
+            <div class="menu-label">Export as</div>
+            <button type="button" data-delim="comma">CSV <span class="dim">(comma)</span></button>
+            <button type="button" data-delim="semicolon">CSV <span class="dim">(semicolon)</span></button>
+            <button type="button" data-delim="tab">TSV <span class="dim">(tab)</span></button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -66,6 +81,38 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
           <span>New</span>
         </button>
+        <span class="sep"></span>
+        <div class="tools-wrap">
+          <button id="btnTools" class="btn" title="Data cleaning tools" type="button" aria-haspopup="menu" aria-expanded="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <span>Tools</span>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div id="toolsMenu" class="popover" hidden role="menu" aria-label="Data tools">
+            <div class="menu-label">Clean data</div>
+            <button type="button" data-tool="trim" title="Strip leading & trailing spaces from every cell">
+              Trim whitespace <kbd>all cells</kbd>
+            </button>
+            <button type="button" data-tool="dedupe">
+              Remove duplicate rows <kbd>keep first</kbd>
+            </button>
+            <button type="button" data-tool="empty-rows">
+              Remove empty rows <kbd>fully blank</kbd>
+            </button>
+            <button type="button" data-tool="empty-cols">
+              Remove empty columns <kbd>fully blank</kbd>
+            </button>
+          </div>
+        </div>
+        <span class="sep"></span>
+        <button id="btnFind" class="btn" title="Find &amp; Replace (Ctrl+H)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <span>Find</span>
+        </button>
+        <button id="btnStats" class="btn" title="Select whole grid → stats in the status bar">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+          <span>Σ</span>
+        </button>
       </div>
 
       <div class="search-wrap">
@@ -79,6 +126,7 @@
     <div id="dropzone">
       <div id="scroller" class="scroller">
         <table class="grid" role="grid" aria-label="CSV grid">
+          <colgroup id="colgroup"></colgroup>
           <thead id="head"></thead>
           <tbody id="body">
             <tr id="padTop" class="pad" aria-hidden="true"><td style="width:100%"></td></tr>
@@ -100,6 +148,13 @@
           <button id="btnSample" class="btn btn-primary">Load sample data</button>
           <button id="btnEmptyOpen" class="btn">Open file…</button>
         </div>
+        <div class="empty-pills" aria-hidden="true">
+          <span class="empty-pill">Per-column filters</span>
+          <span class="empty-pill">Dedupe &amp; trim</span>
+          <span class="empty-pill">Stats</span>
+          <span class="empty-pill">Export CSV / TSV</span>
+          <span class="empty-pill">Dark mode</span>
+        </div>
         <div class="empty-foot">Tabula · a private CSV editor that never leaves your browser</div>
       </div>
 
@@ -118,20 +173,86 @@
         <span id="statCounts" class="stat mono">—</span>
         <span id="statSort" class="stat" hidden></span>
         <span id="statSearch" class="stat" hidden></span>
+        <span id="statFilters" class="stat filter-chip" hidden title="Active column filters — click to view">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <span id="statFiltersText"></span>
+        </span>
+        <button id="clearFilters" class="filter-clear" hidden title="Clear all filters">×</button>
       </div>
       <div class="status-right">
+        <span id="selStats" class="sel-stats" hidden>
+          <span class="sel-n">—</span>
+        </span>
+        <div id="sigmaMenu" class="popover" hidden role="menu" aria-label="Compute statistic">
+          <div class="menu-label">Sum over selection</div>
+          <button type="button" data-sigma="sum">Sum <span class="dim">Σ</span></button>
+          <button type="button" data-sigma="avg">Average <span class="dim">x̄</span></button>
+          <button type="button" data-sigma="min">Minimum <span class="dim">min</span></button>
+          <button type="button" data-sigma="max">Maximum <span class="dim">max</span></button>
+          <button type="button" data-sigma="count">Count <span class="dim">n</span></button>
+          <div class="menu-label" style="margin-top:4px">Bulk</div>
+          <button type="button" data-sigma="clear">Clear selected cells</button>
+          <button type="button" data-sigma="delrows" class="danger" data-danger>Delete selected rows</button>
+        </div>
         <span class="stat mono kbd-hints">
-          <kbd>Enter</kbd> commit &amp; go down · <kbd>Esc</kbd> cancel · <kbd>Ctrl+Z</kbd> undo
+          <kbd>Click</kbd> select · <kbd>Shift+Arrow</kbd> range · <kbd>DblClick</kbd> edit · <kbd>Del</kbd> clear
         </span>
       </div>
     </footer>
 
     <!-- ======= Toast ======= -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- ======= Right-click context menu (in-app) ======= -->
+    <div id="ctxMenu" class="popover" hidden role="menu" aria-label="Cell actions"></div>
   </div>
 
-  <!-- ======= Confirm modal ======= -->
-  <div id="modalRoot" class="modal-root" hidden>
+    <!-- ======= Filter panel (per-column) ======= -->
+    <div id="filterPanelRoot" class="filter-root" hidden>
+      <div id="filterPanel" class="filter-card" role="dialog" aria-modal="true" aria-label="Filter column">
+        <div class="filter-head">
+          <div>
+            <div class="filter-title" id="filterPanelTitle">Filter</div>
+            <div class="filter-sub" id="filterPanelSub"></div>
+          </div>
+          <button id="filterPanelClose" class="btn icon-btn" title="Close (Esc)" type="button" aria-label="Close filter panel">×</button>
+        </div>
+        <div id="filterPanelBody" class="filter-body"></div>
+        <div class="filter-foot">
+          <button id="filterPanelClear" class="btn" type="button">Clear this column</button>
+          <button id="filterPanelApply" class="btn btn-primary" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= Find & Replace modal ======= -->
+    <div id="findRoot" class="modal-root" hidden>
+      <div class="modal-card find-card" role="dialog" aria-modal="true" aria-label="Find and replace">
+        <h3>Find &amp; Replace</h3>
+        <label class="find-row">
+          <span>Find</span>
+          <input id="findInput" type="text" placeholder="Search for text…" />
+        </label>
+        <label class="find-row">
+          <span>Replace with</span>
+          <input id="replaceInput" type="text" placeholder="New text (optional)" />
+        </label>
+        <div class="find-options">
+          <label class="find-check"><input id="findCase" type="checkbox" /> Match case</label>
+          <label class="find-check"><input id="findWhole" type="checkbox" /> Whole cell</label>
+        </div>
+        <div class="find-meta mono" id="findMeta">Search in the selection or whole grid</div>
+        <div class="modal-actions">
+          <button id="findCancel" class="btn">Cancel</button>
+          <button id="findFind" class="btn">Find next</button>
+          <button id="findReplace" class="btn" title="Replace the current match">Replace</button>
+          <button id="findReplaceAll" class="btn btn-primary">Replace all</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= Confirm modal ======= -->
+    <div id="modalRoot" class="modal-root" hidden>
     <div class="modal-card" role="dialog" aria-modal="true">
       <h3 id="modalTitle"></h3>
       <p id="modalText"></p>
