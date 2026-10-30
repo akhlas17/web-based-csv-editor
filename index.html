@@ -75,6 +75,19 @@
             <button type="button" data-delim="tab">TSV <span class="dim">(tab)</span></button>
           </div>
         </div>
+
+        <div class="copyas-wrap">
+          <button id="btnCopyAs" class="btn caret" title="Copy the selection as Markdown / JSON / SQL" type="button" aria-haspopup="menu" aria-expanded="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copy as</span>
+          </button>
+          <div id="copyAsMenu" class="popover" hidden role="menu" aria-label="Copy-as format">
+            <div class="menu-label">Copy the selection as</div>
+            <button type="button" data-copyas="markdown">Markdown <span class="dim">(table)</span></button>
+            <button type="button" data-copyas="json">JSON <span class="dim">(array)</span></button>
+            <button type="button" data-copyas="sql">SQL <span class="dim">(INSERT)</span></button>
+          </div>
+        </div>
       </div>
     </header>
 

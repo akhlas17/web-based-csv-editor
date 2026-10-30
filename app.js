@@ -2093,6 +2093,87 @@ toolsMenu.addEventListener("click", (e) => {
   else if (tool === "empty-rows") toolEmptyRows();
   else if (tool === "empty-cols") toolEmptyCols();
 });
+/* ============ Copy-as (Markdown / JSON / SQL) ============
+   In this grid, headers live in `state.headers` and `state.rows[0]` is already
+   the first data row. Selection bounds are row/col indices into state.rows.
+   Values come from cellValueText so formulas / numbers come out raw. */
+const btnCopyAs = $("btnCopyAs");
+const copyAsMenu = $("copyAsMenu");
+btnCopyAs.addEventListener("click", (e) => { e.preventDefault(); toggleMenu(btnCopyAs, copyAsMenu); });
+
+function copyAsBounds() {
+  if (!sel) return null;
+  return { r1: sel.r1, r2: sel.r2, c1: sel.c1, c2: sel.c2 };
+}
+function requireSelection(fmt) {
+  if (!sel) { showToast("Select cells first to copy as " + fmt, "error"); return false; }
+  return true;
+}
+function selectCols(b) { const out = []; for (let c = b.c1; c <= b.c2; c++) out.push(c); return out; }
+
+// Pure content builders — no clipboard, easy to test & reuse.
+function markdownOfBounds(b) {
+  const heads = selectCols(b).map(c => (state.headers[c] || "Col " + (c + 1)).trim());
+  const rows = [];
+  for (let r = b.r1; r <= b.r2; r++)
+    rows.push("| " + selectCols(b).map(c => cellValueText(r, c).replace(/\|/g, "\\|").replace(/\s*\n\s*/g, "<br>").trim()).join(" | ") + " |");
+  return heads.join(" | ") + "\n| " + heads.map(() => "---").join(" | ") + " |" + (rows.length ? "\n" + rows.join("\n") : "");
+}
+function jsonOfBounds(b) {
+  const keys = selectCols(b).map((c, i) => state.headers[c].trim() || ("col" + (c + 1)));
+  const rows = [];
+  for (let r = b.r1; r <= b.r2; r++) {
+    const obj = {};
+    selectCols(b).forEach((c, i) => {
+      const raw = cellValueText(r, c);
+      const n = toNumberCore(raw === undefined ? "" : String(raw));
+      obj[keys[i]] = n !== null ? n : (raw === undefined ? "" : String(raw));
+    });
+    rows.push(obj);
+  }
+  return JSON.stringify(rows, null, 2);
+}
+function sqlOfBounds(b) {
+  const tableName = (filenameInput.value.trim() || "table").replace(/\.[^.]+$/, "");
+  const cols = selectCols(b).map(c => state.headers[c].trim().replace(/[^a-zA-Z0-9_]/g, "_") || ("col" + (c + 1)));
+  const lines = [];
+  for (let r = b.r1; r <= b.r2; r++) {
+    const vals = selectCols(b).map(c => {
+      const s = cellValueText(r, c) === undefined ? "" : String(cellValueText(r, c));
+      const n = toNumberCore(s);
+      return n !== null ? String(n) : "'" + s.replace(/'/g, "''") + "'";
+    });
+    lines.push(`INSERT INTO ${tableName} (${cols.join(", ")}) VALUES (${vals.join(", ")});`);
+  }
+  return lines.join("\n");
+}
+
+function copyAsMarkdown() {
+  if (!requireSelection("Markdown")) return;
+  return writeClipboard(markdownOfBounds(copyAsBounds()))
+    .then(() => showToast("Copied as Markdown")).catch(() => showToast("Copy blocked", "error"));
+}
+function copyAsJson() {
+  if (!requireSelection("JSON")) return;
+  return writeClipboard(jsonOfBounds(copyAsBounds()))
+    .then(() => showToast("Copied as JSON")).catch(() => showToast("Copy blocked", "error"));
+}
+function copyAsSql() {
+  if (!requireSelection("SQL")) return;
+  return writeClipboard(sqlOfBounds(copyAsBounds()))
+    .then(() => showToast("Copied as SQL")).catch(() => showToast("Copy blocked", "error"));
+}
+
+copyAsMenu.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-copyas]");
+  if (!btn) return;
+  copyAsMenu.hidden = true;
+  const fmt = btn.dataset.copyas;
+  if (fmt === "markdown") copyAsMarkdown();
+  else if (fmt === "json") copyAsJson();
+  else if (fmt === "sql") copyAsSql();
+});
+
 /* ============ Fill (productivity) ============
    Fill down: every row in the selection becomes a copy of the top row's cells.
    Fill right: every column in the selection becomes a copy of the left col's
@@ -3432,6 +3513,8 @@ Object.defineProperty(window, "__tabula", {
     // Charts (canvas bar / line / pie)
     chartData, drawChart, openChart, closeChart, showChartOpen, closeChartFloat,
     get chart() { return chart; }, chartTheme,
+    copyAsBounds, copyAsMarkdown, copyAsJson, copyAsSql,
+    markdownOfBounds, jsonOfBounds, sqlOfBounds,
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,

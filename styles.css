@@ -1194,6 +1194,10 @@ th.col-sel .th-label { color: var(--accent); }
 .export-wrap { display: inline-flex; }
 .export-wrap #btnExport { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .export-wrap .caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--accent-deep); }
+.copyas-wrap { display: inline-flex; }
+.copyas-wrap .caret { border-left: none; }
+.copyas-wrap #copyAsMenu[hidden] { display: none; }
+.copyas-wrap #copyAsMenu { right: auto; left: 0; }
 .tools-wrap .caret { border-left-color: var(--border-strong); background: var(--surface); }
 
 /* ===================== Column filter button ===================== */

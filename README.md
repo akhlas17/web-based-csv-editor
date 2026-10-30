@@ -80,6 +80,10 @@ Then open a file (or drop it onto the window) and you're editing.
   panel that **redraws automatically** as you edit the data. One numeric
   column = bars against that column's labels; several columns = one series
   each; formulas resolve to their numbers for the chart
+- **Copy as** — `Copy as ▾` turns the selection into **Markdown**
+  (`| a | b |` table), **JSON** (array of objects, numbers stay numbers), or
+  **SQL** (`INSERT INTO …` statements with proper quote escaping) — all written
+  to the clipboard
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case
