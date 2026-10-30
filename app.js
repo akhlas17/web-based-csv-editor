@@ -482,6 +482,7 @@ const filterPanelBody = $("filterPanelBody");
 const filterPanelClose = $("filterPanelClose");
 const filterPanelClear = $("filterPanelClear");
 const filterPanelApply = $("filterPanelApply");
+const filterLiveCount = $("filterLiveCount");
 const exportMenu = $("exportMenu");
 const statFilters = $("statFilters");
 const statFiltersText = $("statFiltersText");
@@ -598,7 +599,7 @@ function visibleRows() {
     if (hasFilter) {
       let ok = true;
       for (const c of activeCols) {
-        if (!state.filters[c].has(r[c] === undefined ? "" : r[c])) { ok = false; break; }
+        if (!filterPredMatches(r[c], filterConfig(c))) { ok = false; break; }
       }
       if (!ok) continue;
     }
@@ -607,9 +608,6 @@ function visibleRows() {
   return out;
 }
 function hasActiveFilterSet() {
-  for (const k of Object.keys(state.filters)) {
-    if (state.filters[k].size < state.rows.length) return true;
-  }
   return Object.keys(state.filters).length > 0;
 }
 function distinctValues(c) {
@@ -1015,18 +1013,20 @@ function windowBounds() {
 }
 function paintBody() {
   const vis = windowState.vis, n = vis.length, searching = state.searchQuery !== "";
+  const filtered = hasActiveFilterSet();
   const { s, e } = windowBounds();
   let html = `<tr id="padTop" class="pad" aria-hidden="true"><td style="width:100%;"></td></tr>`;
-  if (searching && n === 0) {
-    html += `<tr class="no-match"><td colspan="${state.headers.length + 2}">No rows match &ldquo;${esc(state.searchQuery)}&rdquo;</td></tr>`;
-  }
-  for (let p = s; p <= e; p++) {
-    const i = vis[p];
-    const parts = [];
-    if (i % 2 === 1) parts.push("zebra");
-    if (searching) parts.push("is-match");
-    if (act && act.r === i) parts.push("active-row");
-    html += rowHtml(i, parts.join(" "));
+  if ((searching || filtered) && n === 0) {
+    html += `<tr class="no-match"><td colspan="${state.headers.length + 2}">No rows match the current filters / search</td></tr>`;
+  } else if (n > 0) {
+    for (let p = s; p <= e; p++) {
+      const i = vis[p];
+      const parts = [];
+      if (i % 2 === 1) parts.push("zebra");
+      if (searching) parts.push("is-match");
+      if (act && act.r === i) parts.push("active-row");
+      html += rowHtml(i, parts.join(" "));
+    }
   }
   html += `<tr class="row-add">
     <td class="rownum" data-action="add-row" role="button" tabindex="0" title="Add row">+</td>
@@ -1142,12 +1142,10 @@ function renderStats() {
     const parts = [];
     for (const k of Object.keys(state.filters).map(Number).sort((a, b) => a - b)) {
       const col = state.headers[k] || "Column " + (k + 1);
-      const allowed = state.filters[k];
       const total = state.rows.length;
       let n = 0;
       for (let i = 0; i < total; i++) {
-        const v = state.rows[i][k] === undefined ? "" : state.rows[i][k];
-        if (allowed.has(v)) n++;
+        if (filterMatchesCell(k, state.rows[i][k])) n++;
       }
       parts.push(`${col}: ${n}/${total}`);
     }
@@ -1600,7 +1598,6 @@ function readFileAsText(file) {
 }
 
 /* ============ Column filters ============ */
-let filterCol = -1;
 
 function remapFiltersAfterColRemoval(removed) {
   const next = {};
@@ -1613,49 +1610,145 @@ function remapFiltersAfterColRemoval(removed) {
   state.filters = next;
 }
 
-function openFilterPanel(c) {
-  filterCol = c;
-  const colHeader = state.headers[c] || ("Column " + (c + 1));
-  filterPanelTitle.textContent = `Filter · ${colHeader}`;
-  const total = state.rows.length;
-  const values = distinctValues(c);
-  const currentAllowed = state.filters[c];
-  const entries = [];
-  for (const [val, n] of valueCounts(c)) {
-    entries.push({ val, n, checked: !currentAllowed || currentAllowed.has(val) });
+/* ============ Column filters (Excel-style auto-filter) ============
+   A filter lives in `state.filters[c]` and is one of:
+     { mode:"values",    values: [ ..string.. ] }   // keep rows whose value is in set
+     { mode:"contains",  text }                      // substring, case-insensitive
+     { mode:"starts",    text }                      // prefix
+     { mode:"is",        text }                      // exact (raw string)
+     { mode:"contains-empty" }                       // keep blank cells
+   Legacy snapshots (a raw Set) also load and behave as a values-allow-list.
+   The predicate below is the single source of truth for "does this cell pass"
+   and is shared by `visibleRows()`, the stats counter and the live count in the
+   filter panel, so every view stays consistent. */
+let filterCol = -1;
+
+function filterConfig(c) {
+  const v = state.filters[c];
+  return (v && typeof v === "object") ? v : null;
+}
+function filterMatchesCell(c, raw) {
+  return filterPredMatches(raw, filterConfig(c));
+}
+
+function filterPredMatches(raw, cfg) {
+  // Legacy: a raw Set (old snapshots) is treated as a values allow-list.
+  if (cfg && cfg instanceof Set) return cfg.has(raw === undefined || raw === null ? "" : String(raw));
+  if (!cfg) return true;
+  const text = raw === undefined || raw === null ? "" : String(raw);
+  if (cfg.mode === "contains-empty") return text.trim() === "";
+  if (cfg.mode === "contains") return text.toLowerCase().includes(String(cfg.text || "").toLowerCase());
+  if (cfg.mode === "starts")     return text.toLowerCase().startsWith(String(cfg.text || "").toLowerCase());
+  if (cfg.mode === "is")         return text === String(cfg.text);
+  if (cfg.mode === "values")     return new Set(cfg.values || []).has(text);
+  return true;
+}
+
+/* ----- Auto-filter panel session (not committed until Apply) ----- */
+const FILTER_MODES = ["values", "contains", "starts", "is", "contains-empty"];
+const FILTER_MODE_LABELS = { values:"in list", contains:"contains", starts:"starts with", is:"is", "contains-empty":"is empty" };
+let filterSession = { mode: "values", text: "" };
+
+// Read the current session into a config object (null = "no filter").
+function filterReadConfig() {
+  if (filterSession.mode === "values") {
+    const boxes = [...document.querySelectorAll('#filterPanelBody input.fv')];
+    const vals = boxes.filter(b => b.checked).map(b => b.value);
+    if (vals.length === boxes.length) return null; // everything checked = no filter
+    return { mode: "values", values: vals };
   }
-  entries.sort((a, b) => (a.n !== b.n) ? a.n - b.n
-           : String(a.val).localeCompare(String(b.val), undefined, { numeric: true }));
-  filterPanelSub.textContent = `${values.size} distinct value${values.size === 1 ? "" : "s"} · ${total} row${total === 1 ? "" : "s"}`;
-  const MAX = 1000;
-  const shown = entries.slice(0, MAX);
-  filterPanelBody.innerHTML = shown.map(e => {
-    const label = e.val === "" ? '<span class="dim">(empty)</span>' : esc(e.val);
-    const count = `<span class="dim">(${e.n})</span>`;
-    return `<label class="filter-item">
-      <input type="checkbox" value="${escAttr(e.val)}" ${e.checked ? "checked" : ""}/>
-      <span class="filter-value">${label}</span> ${count}
+  if (filterSession.mode === "contains-empty") return { mode: "contains-empty" };
+  return { mode: filterSession.mode, text: filterSession.text };
+}
+
+// Render the mode selector + the current mode's input area.
+function filterRenderBody() {
+  const c = filterCol;
+  const entries = valueCounts(c);
+  const curCfg = filterConfig(c);
+  const modeSel = FILTER_MODES.map(m => {
+    const active = m === filterSession.mode;
+    return `<label class="filter-mode-opt ${active ? "on" : ""}">
+      <input type="radio" name="fm" value="${m}" ${active ? "checked" : ""}/>
+      <span>${FILTER_MODE_LABELS[m]}</span>
     </label>`;
   }).join("");
-  if (entries.length > MAX) {
-    filterPanelBody.innerHTML += `<div class="filter-truncate">Showing first ${MAX} of ${entries.length} distinct values (least frequent first). Use the search box to find a specific value.</div>`;
+  let inputHtml = "";
+  if (filterSession.mode === "values") {
+    const allowed = curCfg && curCfg.mode === "values" ? new Set(curCfg.values || []) : null;
+    inputHtml = `<div class="filter-input-values">` +
+      entries.slice(0, 1000).map(([val, n]) => {
+        const checked = allowed ? allowed.has(val) : true;
+        const label = val === "" ? '<span class="dim">(empty)</span>' : esc(val);
+        return `<label class="filter-item">
+          <input type="checkbox" class="fv" value="${escAttr(val)}" ${checked ? "checked" : ""}/>
+          <span class="filter-value">${label}</span>
+          <span class="dim filter-nc">${n}</span>
+        </label>`;
+      }).join("") +
+      (entries.length > 1000 ? `<div class="filter-truncate">Showing first 1000 of ${entries.length} distinct values.</div>` : "") +
+      `</div>`;
+  } else if (filterSession.mode === "contains-empty") {
+    inputHtml = `<div class="filter-input-text"><span class="dim">Keep rows where this column is empty/blank.</span></div>`;
+  } else {
+    const ph = filterSession.mode === "is" ? "exact value" : filterSession.mode === "starts" ? "prefix" : "substring";
+    inputHtml = `<div class="filter-input-text">
+      <input id="filterText" type="text" value="${escAttr(filterSession.text)}" placeholder="${ph}" spellcheck="false"/>
+    </div>`;
   }
-  // Position the panel above & near the button (or center if no button).
+  filterPanelBody.innerHTML = modeSel + inputHtml;
+  filterRefreshLiveCount();
+  const ft = document.getElementById("filterText");
+  if (ft) { ft.focus(); ft.setSelectionRange(ft.value.length, ft.value.length); }
+}
+
+// "If you clicked Apply right now, how many rows would pass?"
+function filterRefreshLiveCount() {
+  const c = filterCol, total = state.rows.length;
+  const cfg = filterReadConfig();
+  let pass = 0;
+  for (let i = 0; i < total; i++) if (filterPredMatches(state.rows[i][c], cfg)) pass++;
+  filterLiveCount.textContent = `${pass} of ${total}`;
+}
+
+// Delegated (attached once) — survives re-renders of the body.
+filterPanelBody.addEventListener("change", (e) => {
+  if (e.target.name === "fm") { filterSession.mode = e.target.value; filterRenderBody(); }
+  else if (e.target.classList && e.target.classList.contains("fv")) filterRefreshLiveCount();
+});
+filterPanelBody.addEventListener("input", (e) => {
+  if (e.target.id === "filterText") { filterSession.text = e.target.value; filterRefreshLiveCount(); }
+});
+
+function openFilterPanel(c) {
+  filterCol = c;
+  const cfg = filterConfig(c);
+  filterSession.mode = cfg ? (cfg.mode || "values") : "values";
+  filterSession.text = (cfg && typeof cfg.text === "string") ? cfg.text : "";
+  const colHeader = state.headers[c] || ("Column " + (c + 1));
+  const valuesSize = distinctValues(c).size;
+  const label = cfg ? (FILTER_MODE_LABELS[cfg.mode] || cfg.mode) : "no filter";
+  filterPanelTitle.textContent = `Filter · ${colHeader}`;
+  filterPanelSub.textContent = `${valuesSize} distinct value${valuesSize === 1 ? "" : "s"} · ${state.rows.length} row${state.rows.length === 1 ? "" : "s"} · ${label}`;
+  filterRenderBody();
+  // Position near the header funnel (or center as fallback).
   filterPanelRoot.hidden = false;
   const panel = filterPanel;
   const w = panel.offsetWidth, h = panel.offsetHeight;
   const vw = window.innerWidth, vh = window.innerHeight;
   let left = Math.max(12, Math.min(vw - w - 12, (vw - w) / 2));
-  let top = Math.max(12, Math.min(vh - h - 12, (vh - h) / 2));
+  let top  = Math.max(12, Math.min(vh - h - 12, (vh - h) / 2));
   const btn = document.querySelector(`th .th-filter[data-col="${c}"]`);
   if (btn) {
     const r = btn.getBoundingClientRect();
     left = Math.max(12, Math.min(vw - w - 12, r.left + (r.right - r.left) / 2 - w / 2));
-    top = Math.min(vh - h - 12, r.bottom + 8);
+    top  = Math.min(vh - h - 12, r.bottom + 8);
   }
   panel.style.left = left + "px";
-  panel.style.top = top + "px";
+  panel.style.top  = top  + "px";
+  filterPanel._readConfig = filterReadConfig;
 }
+
 function closeFilterPanel() {
   filterPanelRoot.hidden = true;
   filterCol = -1;
@@ -1669,24 +1762,18 @@ function valueCounts(c) {
   return [...m.entries()];
 }
 function applyFilterFromPanel() {
-  if (filterCol < 0) return;
-  const boxes = [...filterPanelBody.querySelectorAll('input[type=checkbox]')];
-  const total = boxes.length;
-  const checked = boxes.filter(b => b.checked).length;
-  if (checked === total) {
-    delete state.filters[filterCol]; // everything selected = no filter
-  } else {
-    state.filters[filterCol] = new Set(boxes.filter(b => b.checked).map(b => b.value));
-  }
+  if (filterCol < 0 || typeof filterPanel._readConfig !== "function") return;
+  const cfg = filterPanel._readConfig();
+  const c = filterCol;
+  if (cfg) state.filters[c] = cfg;
+  else delete state.filters[c];
+  filterPanel._readConfig = null;
   closeFilterPanel();
   stopEdit();
   render();
-  showToast(checked === total ? "Filter cleared" : "Filter applied");
+  showToast(cfg ? "Filter applied" : "Filter cleared");
 }
-filterPanelApply.addEventListener("click", applyFilterFromPanel);
-filterPanelClose.addEventListener("click", closeFilterPanel);
-filterPanelRoot.addEventListener("click", (e) => { if (e.target === filterPanelRoot) closeFilterPanel(); });
-filterPanelClear.addEventListener("click", () => {
+function _filterClearThisCol() {
   if (filterCol < 0) return;
   const name = state.headers[filterCol] || ("Column " + (filterCol + 1));
   delete state.filters[filterCol];
@@ -1694,7 +1781,11 @@ filterPanelClear.addEventListener("click", () => {
   stopEdit();
   render();
   showToast(`Cleared filter on "${name}"`);
-});
+}
+filterPanelApply.addEventListener("click", applyFilterFromPanel);
+filterPanelClose.addEventListener("click", closeFilterPanel);
+filterPanelRoot.addEventListener("click", (e) => { if (e.target === filterPanelRoot) closeFilterPanel(); });
+filterPanelClear.addEventListener("click", _filterClearThisCol);
 clearFiltersBtn.addEventListener("click", clearFilters);
 statFilters.addEventListener("click", () => {
   const c = Object.keys(state.filters).map(Number).sort((a, b) => a - b)[0];
@@ -3083,8 +3174,12 @@ Object.defineProperty(window, "__tabula", {
     get active() { return act; },
     setSel, setSelRow, setSelCol, extendSel, clearSel,
     selectWholeGrid, activeCell, isMulti,
-    render,
-    pushHistory,
+    visibleRows,
+    render, pushHistory,
+    openFilterPanel, closeFilterPanel, applyFilterFromPanel,
+    filterSession, filterReadConfig,
+    filterConfig, filterPredMatches, filterMatchesCell, hasActiveFilterSet, distinctValues,
+    valueCounts,
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,

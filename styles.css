@@ -1222,12 +1222,69 @@ th.col-sel .th-label { color: var(--accent); }
 .filter-truncate { font-size: 11.5px; color: var(--text-faint); padding: 8px 10px; text-align: center; }
 .filter-foot {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
 }
+.filter-live {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  margin-right: auto;
+  font-variant-numeric: tabular-nums;
+}
+.filter-live[aria-hidden="true"]:empty { display: none; }
+
+.filter-mode-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text);
+  user-select: none;
+}
+.filter-mode-opt:hover { background: var(--surface-2); }
+.filter-mode-opt input[type="radio"] {
+  accent-color: var(--filter-check);
+  margin: 0;
+  width: 14px; height: 14px;
+}
+.filter-mode-opt.on { background: color-mix(in srgb, var(--filter-check) 12%, transparent); }
+.filter-mode-opt.on span { font-weight: 700; color: var(--filter-check); }
+.filter-mode-opt + .filter-mode-opt { margin-top: 1px; }
+.filter-input-text {
+  padding: 10px 8px 6px;
+}
+.filter-input-text input[type="text"] {
+  width: 100%;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+}
+.filter-input-text input[type="text"]:focus {
+  border-color: var(--filter-check);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--filter-check) 14%, transparent);
+}
+.filter-input-text .dim {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  display: block;
+  padding: 4px 2px;
+}
+.filter-input-values { padding: 2px 0 0; }
+.filter-nc { flex: none; }
 
 /* ===================== Stats card ===================== */
 .stats-card { width: min(600px, 94vw); max-height: min(80vh, 640px); display: flex; flex-direction: column; }

@@ -68,6 +68,13 @@ Then open a file (or drop it onto the window) and you're editing.
   - **Formula bar** — name box (`C3`) + editable input; `Enter` commits,
     `Esc` reverts, `F2` jumps in; clicking another cell commits first, then
     moves (Excel semantics)
+- **Auto-filter** — click a column's funnel to open an Excel‑style filter with
+  five modes, plus a live match count as you tweak it:
+  - **In list** — multi‑select the exact values to keep (with per‑value counts)
+  - **Contains / Starts‑with** — case‑insensitive text filters
+  - **Is** — exact match · **Is empty** — keep only blank cells
+  - Multiple columns combine with **AND**; the status bar shows `Col: kept/total`
+    per column, and filtered columns keep their blue funnel on the header
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case
