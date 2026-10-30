@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tabula — CSV Editor</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236c8cff'/%3E%3Cpath d='M8 10h16v2H8zM8 15h10v2H8zM8 20h13v2H8z' fill='white'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23107c41'/%3E%3Cpath d='M8 10h16v2H8zM8 15h10v2H8zM8 20h13v2H8z' fill='white'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -22,7 +22,7 @@
             <rect width="32" height="32" rx="8" fill="url(#g)"/>
             <path d="M8 10h16v2H8zM8 15h10v2H8zM8 20h13v2H8z" fill="white"/>
             <defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32">
-              <stop stop-color="#83a5ff"/><stop offset="1" stop-color="#3b82f6"/>
+              <stop stop-color="#2fb270"/><stop offset="1" stop-color="#107c41"/>
             </linearGradient></defs>
           </svg>
         </span>
@@ -251,6 +251,7 @@
     <!-- ======= Status bar ======= -->
     <footer class="statusbar">
       <div class="status-left">
+        <span class="sheet-tab" id="sheetTab" title="Active sheet"><svg class="sheet-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><rect x="4" y="4" width="16" height="16"/><path d="M4 10h16M10 4v16"/></svg><span class="sheet-name" id="sheetName">Sheet1</span></span>
         <span id="statCounts" class="stat mono">—</span>
         <span id="statSort" class="stat" hidden></span>
         <span id="statSearch" class="stat" hidden></span>

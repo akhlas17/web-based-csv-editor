@@ -10,3 +10,4 @@ yarn-error.log*
 
 # Local dev server noise
 *.log
+.serena/

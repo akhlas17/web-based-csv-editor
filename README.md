@@ -12,9 +12,17 @@ app.js       →  all application logic
 parsing.worker.js →  large-file parsing off the main thread
 ```
 
-That's the whole project. No `package.json`, no bundler, no dependencies.
+ That's the whole project. No `package.json`, no bundler, no dependencies.
 
 > **Live demo →** [akhlas17.github.io/web-based-csv-editor](https://akhlas17.github.io/web-based-csv-editor/)
+
+## Look — a native spreadsheet
+
+The interface is built to feel like a real spreadsheet rather than a web widget: a
+neutral **grey command bar** up top, a **Excel‑style sheet tab** and a clean
+status bar at the bottom, and a spreadsheet grid beneath. The accent is the
+familiar **Excel green** on file, selection, and the active sheet — and the whole
+chrome reads naturally in both **light and dark** themes (toggle in the top‑right).
 
 ## Get started
 
