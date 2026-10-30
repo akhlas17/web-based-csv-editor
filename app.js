@@ -474,6 +474,16 @@ const btnTheme = $("btnTheme");
 const btnTools = $("btnTools");
 const toolsMenu = $("toolsMenu");
 const btnStats = $("btnStats");
+const btnChart = $("btnChart");
+const chartRoot = $("chartRoot");
+const chartCanvas = $("chartCanvas");
+const chartHint = $("chartHint");
+const chartShow = $("chartShow");
+const chartClose = $("chartClose");
+const chartFloat = $("chartFloat");
+const chartFloatCanvas = $("chartFloatCanvas");
+const chartFloatType = $("chartFloatType");
+const chartFloatClose = $("chartFloatClose");
 const filterPanelRoot = $("filterPanelRoot");
 const filterPanel = $("filterPanel");
 const filterPanelTitle = $("filterPanelTitle");
@@ -698,6 +708,7 @@ function render() {
   renderHeader();
   renderBody();
   renderStats();
+  if (chart) updateChartUI();
 }
 
 const esc = s => {
@@ -1796,7 +1807,245 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !filterPanelRoot.hidden) closeFilterPanel();
 });
 
-/* ============ Tools menu (data cleaning) ============ */
+/* ============ Charts (canvas: bar / line / pie) ============
+   Data is derived from the current selection — or, when nothing is selected,
+   the whole grid:
+     • one numeric column  → x = the column's label cells, y = numbers
+     • a block (N cols)    → one series per column, x = row index (or first label)
+     • a single mixed row  → one series
+   Series are re-derived on every render()/data change, so the open chart
+   always reflects live values without the user doing anything. */
+let chart = null; // { type: "bar"|"line"|"pie", open: bool }
+const CHART_PALETTE = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6", "#ec4899", "#64748b"];
+
+function chartTheme() {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  return {
+    dark,
+    grid: dark ? "rgba(255,255,255,.10)" : "rgba(16,24,40,.08)",
+    axis: dark ? "rgba(255,255,255,.45)" : "rgba(16,24,40,.40)",
+    text: dark ? "#e5e8f2" : "#1f2733",
+    faint: dark ? "#9aa3b8" : "#6b7280",
+    track: dark ? "#2d2d2d" : "#eef1f6",
+    series: i => CHART_PALETTE[i % CHART_PALETTE.length],
+  };
+}
+
+// Resolve the chart data model from the grid + selection. Returns
+// { labels:[], series:[{name, values:[]}], title } or null if no numbers exist.
+function chartData() {
+  let r1, r2, c1, c2;
+  if (sel && isMulti()) { r1 = sel.r1; r2 = sel.r2; c1 = sel.c1; c2 = sel.c2; }
+  else if (sel && isFullRowSpan()) { r1 = 0; r2 = state.rows.length - 1; c1 = sel.r1; c2 = sel.r1; } // whole row
+  else if (sel && isFullColSpan()) { r1 = 0; r2 = state.rows.length - 1; c1 = sel.c2; c2 = sel.c2; } // whole col
+  else { r1 = 1; r2 = Math.max(1, state.rows.length - 1); c1 = 0; c2 = state.headers.length - 1; } // whole grid
+  if (!state.rows.length) return null;
+
+  const numAt = (r, c) => {
+    const v = state.rows[r] && state.rows[r][c];
+    const s = v === undefined ? "" : String(v);
+    if (s.trim().startsWith("=")) { const rv = resolveCell(r, c); return (rv.e || rv.n === null) ? NaN : rv.n; }
+    const ti = typeInfo(s);
+    return (ti.type === "number" || ti.type === "percent" || ti.type === "currency") ? ti.value : NaN;
+  };
+  const isNumCol = c => { let n = 0; for (let r = r1; r <= r2; r++) if (!isNaN(numAt(r, c))) n++; return n > 0; };
+
+  // single numeric column → label/value pairs
+  if (c1 === c2 && isNumCol(c1)) {
+    const labels = [], values = [];
+    for (let r = r1; r <= r2; r++) { const v = numAt(r, c1); if (isNaN(v)) continue;
+      labels.push(String(state.rows[r][c1])); values.push(v); }
+    if (!values.length) return null;
+    return { title: state.headers[c1], labels, series: [{ name: state.headers[c1], values }] };
+  }
+
+  // multiple numeric columns → one series each; x-axis = row index
+  const series = [];
+  const labels = [];
+  for (let r = r1; r <= r2; r++) labels.push(String((r + 1)));
+  for (let c = c1; c <= c2; c++) {
+    if (!isNumCol(c)) continue;
+    const values = [];
+    for (let r = r1; r <= r2; r++) values.push(isNaN(numAt(r, c)) ? 0 : numAt(r, c));
+    const nonZero = values.some(v => v !== 0);
+    if (nonZero) series.push({ name: state.headers[c] || ("Col " + (c + 1)), values });
+  }
+  if (!series.length) return null;
+  return { title: (state.headers[c1] || "Row") + " → " + (state.headers[Math.min(c2, state.headers.length - 1)] || "grid"), labels, series };
+}
+
+function shortNum(n) {
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (a >= 1e4) return (n / 1e3).toFixed(0) + "k";
+  return String(Math.round(n * 100) / 100);
+}
+
+// Draw bar / line / pie into a canvas. `model` from chartData().
+function drawChart(canvas, model, type) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = 520, cssH = 300;
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  canvas.style.width = cssW + "px"; canvas.style.height = cssH + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const th = chartTheme();
+  const pad = { l: 52, r: 16, t: 22, b: 34 };
+  const { labels, series } = model;
+  const allVals = labels.map((_, i) => Math.max(...series.map(s => Math.abs(s.values[i] || 0))));
+  const yMax = Math.max(1, ...allVals);
+
+  if (type === "pie") {
+    const total = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0))
+                      .reduce((a, b) => a + Math.max(0, b), 0);
+    // Use the first series' values as the pie parts.
+    const vals = series[0].values.map(v => Math.max(0, v));
+    const sum = vals.reduce((a, b) => a + b, 0) || 1;
+    const cx = cssW / 2, cy = cssH / 2, r = Math.min(cssW, cssH) / 2 - 30;
+    let a = -Math.PI / 2;
+    labels.forEach((lab, i) => {
+      const frac = vals[i] / sum;
+      const a1 = a + frac * Math.PI * 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a, a1);
+      ctx.fillStyle = th.series(i); ctx.fill();
+      a = a1;
+    });
+    // legend
+    let ly = 26;
+    labels.forEach((lab, i) => {
+      ctx.fillStyle = th.series(i);
+      ctx.fillRect(14, ly, 12, 12);
+      ctx.fillStyle = th.text;
+      ctx.font = "12px " + getComputedStyle(document.body).getPropertyValue("--font-ui");
+      ctx.textAlign = "left";
+      ctx.fillText((lab || "").slice(0, 14) + " · " + shortNum(Math.max(0, series[0].values[i] || 0)), 32, ly + 10);
+      ly += 18;
+    });
+    return;
+  }
+
+  // ---- axis + bars or line ----
+  const W = cssW - pad.l - pad.r, H = cssH - pad.t - pad.b;
+  // gridlines + y-axis (5 ticks)
+  ctx.lineWidth = 1;
+  ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  for (let i = 0; i <= 4; i++) {
+    const t = i / 4;
+    const y = pad.t + H - t * H;
+    ctx.strokeStyle = th.grid;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    ctx.fillStyle = th.faint; ctx.textAlign = "right";
+    ctx.fillText(shortNum(yMax * t), pad.l - 8, y + 4);
+  }
+  const bw = W / labels.length;
+  const barW = Math.max(2, Math.min(46, bw * 0.62));
+  // bars
+  ctx.fillStyle = th.faint; ctx.textAlign = "left";
+  if (type === "bar") {
+    labels.forEach((lab, i) => {
+      series.forEach((s, si) => {
+        const v = Math.max(0, s.values[i] || 0);
+        const sub = series.length > 1 ? (si + 1) / series.length : 0.5;
+        const cxl = pad.l + i * bw + bw / 2 - (series.length > 1 ? (bw - barW) / 2 : bw / 2);
+        const x = pad.l + i * bw + bw / 2 - (series.length - 1) * barW / 2 + si * (series.length > 1 ? barW : 0);
+        const bh = H * (v / yMax);
+        ctx.fillStyle = th.series(si);
+        ctx.fillRect(pad.l + i * bw + (bw - (series.length * barW)) / 2 + si * barW, pad.t + H - bh, barW - (series.length > 1 ? 1 : 0), bh);
+      });
+    });
+  } else { // line (multi-line)
+    series.forEach((s, si) => {
+      ctx.strokeStyle = th.series(si); ctx.lineWidth = 2; ctx.beginPath();
+      const n = labels.length;
+      labels.forEach((lab, i) => {
+        const x = pad.l + (n === 1 ? W / 2 : (i / (n - 1)) * W);
+        const v = Math.max(0, s.values[i] || 0);
+        const y = pad.t + H - H * (v / yMax);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // point
+      labels.forEach((lab, i) => {
+        const x = pad.l + (n === 1 ? W / 2 : (i / (n - 1)) * W);
+        const y = pad.t + H - H * (Math.max(0, s.values[i] || 0) / yMax);
+        ctx.fillStyle = th.series(si); ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      });
+    });
+  }
+  // x labels
+  ctx.fillStyle = th.faint; ctx.textAlign = "center";
+  const step = Math.max(1, Math.ceil(labels.length / 10));
+  labels.forEach((lab, i) => {
+    if (i % step !== 0 && i !== labels.length - 1) return;
+    const x = pad.l + i * bw + bw / 2;
+    ctx.fillText((lab || "").slice(0, 8), x, cssH - 14);
+  });
+  // axis line
+  ctx.strokeStyle = th.axis;
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + H); ctx.lineTo(pad.l + W, pad.t + H); ctx.stroke();
+}
+
+function updateChartUI() {
+  if (!chart) return;
+  const model = chartData();
+  const hint = chartHint, float = chartFloat;
+  if (!model) { hint.textContent = "No numeric values in the selection — pick numeric data."; }
+  else hint.textContent = `${model.series.length} series × ${model.labels.length} points`;
+  if (!float.hidden) {
+    try { drawChart(chartFloatCanvas, model, chart.type); } catch (e) {}
+  }
+}
+
+function openChart() {
+  chart = { type: "bar", open: false };
+  chartRoot.hidden = false;
+  const model = chartData();
+  if (model) drawChart(chartCanvas, model, "bar");
+  else chartHint.textContent = "No numeric values — select numeric cells first.";
+  if (model) chartCanvas.closest(".chart-canvas-wrap").style.opacity = "1";
+  else chartCanvas.closest(".chart-canvas-wrap").style.opacity = "0.4";
+  requestAnimationFrame(() => chartShow.blur());
+}
+function closeChart() { chartRoot.hidden = true; }
+function currentChartType() {
+  const r = chartRoot.querySelector('input[name=ctype]:checked');
+  return r ? r.value : "bar";
+}
+function showChartOpen() {
+  chart.type = currentChartType();
+  const model = chartData();
+  if (!model) { closeChart(); showToast("No numeric data to chart", "error"); return; }
+  closeChart();
+  chartFloat.hidden = false;
+  requestAnimationFrame(() => drawChart(chartFloatCanvas, model, chart.type));
+}
+function closeChartFloat() { chartFloat.hidden = true; if (chart) { chart.open = false; } }
+function reopenFromFloat() {
+  // change type from float → open the modal with current selection
+  const cur = currentChartType();
+  chartRoot.hidden = false;
+  const r = chartRoot.querySelector(`input[name=ctype][value="${cur}"]`); if (r) r.checked = true;
+  const model = chartData(); if (model) drawChart(chartCanvas, model, cur);
+}
+
+btnChart && btnChart.addEventListener("click", openChart);
+chartClose && chartClose.addEventListener("click", closeChart);
+chartShow && chartShow.addEventListener("click", showChartOpen);
+chartFloatType && chartFloatType.addEventListener("click", reopenFromFloat);
+chartFloatClose && chartFloatClose.addEventListener("click", closeChartFloat);
+chartRoot && chartRoot.addEventListener("click", (e) => { if (e.target === chartRoot) closeChart(); });
+chartRoot && chartRoot.addEventListener("change", (e) => {
+  if (e.target.name === "ctype") {
+    const model = chartData();
+    if (model) drawChart(chartCanvas, model, e.target.value);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !chartRoot.hidden) closeChart();
+  else if (e.key === "Escape" && !chartFloat.hidden) closeChartFloat();
+});
 function toggleMenu(el, menu) {
   const willOpen = menu.hidden;
   // close any open
@@ -3180,6 +3429,9 @@ Object.defineProperty(window, "__tabula", {
     filterSession, filterReadConfig,
     filterConfig, filterPredMatches, filterMatchesCell, hasActiveFilterSet, distinctValues,
     valueCounts,
+    // Charts (canvas bar / line / pie)
+    chartData, drawChart, openChart, closeChart, showChartOpen, closeChartFloat,
+    get chart() { return chart; }, chartTheme,
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,

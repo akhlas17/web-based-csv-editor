@@ -164,6 +164,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
           <span>Σ</span>
         </button>
+        <button id="btnChart" class="btn" title="Insert a chart of the selection (or whole grid)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 2 5-7"/></svg>
+          <span>Chart</span>
+        </button>
       </div>
 
       <div class="search-wrap">
@@ -310,6 +314,38 @@
           <button id="findReplaceAll" class="btn btn-primary">Replace all</button>
         </div>
       </div>
+    </div>
+
+    <!-- ======= Chart modal (choose type + preview) ======= -->
+    <div id="chartRoot" class="modal-root" hidden>
+      <div class="modal-card chart-card" role="dialog" aria-modal="true" aria-label="Insert chart">
+        <h3>Insert chart</h3>
+        <p class="chart-hint" id="chartHint">Select a range, then pick a type.</p>
+        <div class="chart-types" role="radiogroup" aria-label="Chart type">
+          <label class="chart-type on" data-chart="bar"><input type="radio" name="ctype" value="bar" checked/><span class="ct-name">Bar</span></label>
+          <label class="chart-type" data-chart="line"><input type="radio" name="ctype" value="line"/><span class="ct-name">Line</span></label>
+          <label class="chart-type" data-chart="pie"><input type="radio" name="ctype" value="pie"/><span class="ct-name">Pie</span></label>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="chartCanvas" width="520" height="320"></canvas></div>
+        <div class="modal-actions">
+          <button id="chartClose" class="btn">Close</button>
+          <button id="chartShow" class="btn btn-primary">Show chart</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= Floating chart (open) ======= -->
+    <div id="chartFloat" class="chart-float" hidden>
+      <div class="chart-float-head">
+        <span class="chart-float-title">Chart</span>
+        <span>
+          <button id="chartFloatType" class="icon-btn" title="Change type" type="button" aria-label="Change chart type">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 2 5-7"/></svg>
+          </button>
+          <button id="chartFloatClose" class="icon-btn" title="Close (Esc)" type="button" aria-label="Close chart">×</button>
+        </span>
+      </div>
+      <div class="chart-float-body"><canvas id="chartFloatCanvas" width="480" height="300"></canvas></div>
     </div>
 
     <!-- ======= Confirm modal ======= -->

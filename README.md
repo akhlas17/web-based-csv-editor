@@ -75,6 +75,11 @@ Then open a file (or drop it onto the window) and you're editing.
   - **Is** — exact match · **Is empty** — keep only blank cells
   - Multiple columns combine with **AND**; the status bar shows `Col: kept/total`
     per column, and filtered columns keep their blue funnel on the header
+- **Charts** — hit **Chart** (toolbar) over a selection to preview a **Bar**,
+  **Line** or **Pie** chart on a live canvas; "Show" pins it in a floating
+  panel that **redraws automatically** as you edit the data. One numeric
+  column = bars against that column's labels; several columns = one series
+  each; formulas resolve to their numbers for the chart
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case

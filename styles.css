@@ -901,6 +901,69 @@ tr.pad { height: 0; }
 .modal-card p .mono { font-family: var(--mono); color: var(--accent); font-weight: 600; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
+/* ---------- Chart card ---------- */
+.chart-card { width: min(560px, 94vw); padding: 18px 18px 14px; }
+.chart-card h3 { margin-bottom: 6px; }
+.chart-hint { font-size: 12.5px; color: var(--text-faint); margin: 0 0 12px; }
+.chart-types { display: flex; gap: 6px; margin-bottom: 12px; }
+.chart-type {
+  -webkit-appearance: none; appearance: none;
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px; font-weight: 550;
+  cursor: pointer;
+}
+.chart-type input { -webkit-appearance: none; appearance: none; width: 0; height: 0; border: 0; margin: 0; }
+.chart-type.on, .chart-type:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.chart-canvas-wrap {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  transition: opacity .15s ease;
+}
+.chart-canvas-wrap canvas { display: block; max-width: 100%; }
+
+/* ---------- Floating chart ---------- */
+.chart-float {
+  position: fixed;
+  z-index: 70;
+  right: 14px;
+  top: 14px;
+  width: 512px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.chart-float-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+}
+.chart-float-head span { display: flex; align-items: center; gap: 4px; }
+.chart-float-title { letter-spacing: .2px; }
+.chart-float-body {
+  padding: 8px;
+  display: grid; place-items: center;
+}
+.chart-float-body canvas { display: block; }
+
 /* ---------- Find & Replace card ---------- */
 .find-card { width: min(420px, 90vw); padding: 18px 18px 14px; }
 .find-card h3 { margin-bottom: 12px; }
