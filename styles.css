@@ -713,6 +713,16 @@ td.cell.is-err .cell-display {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+/* Conditional formatting — colors come from inline --cf-bg / --cf-fg set by the rule */
+td.cell.cf-on .cell-display {
+  color: var(--cf-fg);
+  background: var(--cf-bg);
+}
+td.cell.cf-on .cell-input {
+  color: var(--cf-fg);
+  background: var(--cf-bg);
+}
+
 /* in-cell editor */
 .cell .cell-input {
   position: absolute;
@@ -963,6 +973,36 @@ tr.pad { height: 0; }
   display: grid; place-items: center;
 }
 .chart-float-body canvas { display: block; }
+
+/* ---------- Conditional formatting card ---------- */
+.cf-card { width: min(460px, 94vw); padding: 18px 18px 14px; }
+.cf-card h3 { margin-bottom: 4px; }
+.cf-hint { font-size: 12.5px; color: var(--text-faint); margin: 0 0 14px; }
+.cf-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.cf-field { display: flex; flex-direction: column; gap: 5px; flex: 1 1 120px; }
+.cf-field > span { font-size: 11.5px; font-weight: 600; color: var(--text-faint); }
+.cf-field select, .cf-field input {
+  font-size: 13px; font-weight: 500; padding: 7px 9px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-family: inherit; outline: none;
+}
+.cf-field select:focus, .cf-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.cf-between { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cf-between-lab { font-size: 12px; color: var(--text-faint); font-weight: 600; }
+.cf-between input { font-size: 13px; font-weight: 500; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.cf-between span { font-size: 12px; color: var(--text-faint); }
+.cf-swatches { display: flex; gap: 8px; margin-bottom: 14px; }
+.cf-sw { -webkit-appearance: none; appearance: none; flex: 1; display: grid; place-items: center; padding: 4px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; background: var(--surface); }
+.cf-sw input { position: absolute; width: 0; height: 0; opacity: 0; }
+.cf-sw.on, .cf-sw:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.cf-swatch { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font-weight: 700; font-size: 13px; }
+.cf-list { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
+.cf-list li { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); font-size: 13px; }
+.cf-list .cf-dot { width: 16px; height: 16px; border-radius: 5px; flex: none; }
+.cf-list .cf-rule-txt { flex: 1; }
+.cf-list .cf-none { color: var(--text-faint); font-size: 12.5px; border-style: dashed; }
+.cf-list .button { border: none; background: transparent; color: var(--text-faint); font-size: 16px; cursor: pointer; border-radius: 6px; padding: 0 4px; line-height: 1; }
+.cf-list .button:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
 /* ---------- Find & Replace card ---------- */
 .find-card { width: min(420px, 90vw); padding: 18px 18px 14px; }

@@ -84,6 +84,11 @@ Then open a file (or drop it onto the window) and you're editing.
   (`| a | b |` table), **JSON** (array of objects, numbers stay numbers), or
   **SQL** (`INSERT INTO …` statements with proper quote escaping) — all written
   to the clipboard
+- **Conditional formatting** — the **Format** button adds highlight rules to a
+  selection: **is / is not / greater-than / at-least / less-than / at-most /
+  contains / between / top-N / bottom-N / blank**, each with a color swatch.
+  First matching rule wins; colors are drawn live as the data changes, and the
+  rules are undo-able and remembered with the file
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case

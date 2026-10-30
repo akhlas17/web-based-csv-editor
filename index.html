@@ -181,6 +181,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 2 5-7"/></svg>
           <span>Chart</span>
         </button>
+        <button id="btnCf" class="btn" title="Conditional formatting rules (highlight by condition)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><path d="M14 14l7 7"/><path d="M8.5 8.5L14 3l7 7-5.5 5.5" opacity=".45"/></svg>
+          <span>Format</span>
+        </button>
       </div>
 
       <div class="search-wrap">
@@ -359,6 +363,58 @@
         </span>
       </div>
       <div class="chart-float-body"><canvas id="chartFloatCanvas" width="480" height="300"></canvas></div>
+    </div>
+
+    <!-- ======= Conditional formatting modal ======= -->
+    <div id="cfRoot" class="modal-root" hidden>
+      <div class="modal-card cf-card" role="dialog" aria-modal="true" aria-label="Conditional formatting">
+        <h3>Conditional formatting</h3>
+        <p class="cf-hint">Select a range, then add a highlight rule. Rules apply to that range; "top/bottom N" compare within the column.</p>
+        <div class="cf-grid">
+          <label class="cf-field">
+            <span>Condition</span>
+            <select id="cfKind">
+              <option value="is">is</option>
+              <option value="not">is not</option>
+              <option value="gt">is greater than</option>
+              <option value="gte">is at least</option>
+              <option value="lt">is less than</option>
+              <option value="lte">is at most</option>
+              <option value="contains">contains</option>
+              <option value="between">between</option>
+              <option value="topn">is top N</option>
+              <option value="bottomn">is bottom N</option>
+              <option value="blank">is blank</option>
+              <option value="notblank">is not blank</option>
+            </select>
+          </label>
+          <label class="cf-field" id="cfParamWrap" style="flex:1 1 40%">
+            <span id="cfParamLabel">Value</span>
+            <input id="cfParam" type="text" spellcheck="false" />
+          </label>
+          <label class="cf-field" id="cfTopWrap" style="flex:1 1 40%">
+            <span>N</span>
+            <input id="cfTopN" type="number" min="1" value="3" />
+          </label>
+        </div>
+        <div class="cf-between" style="display:none">
+          <span class="cf-between-lab">Between</span>
+          <input id="cfParamLo" type="text" placeholder="min" spellcheck="false" />
+          <span>and</span>
+          <input id="cfParamHi" type="text" placeholder="max" spellcheck="false" />
+        </div>
+        <div class="cf-swatches" role="radiogroup" aria-label="Highlight color">
+          <label class="cf-sw" title="Green"><input type="radio" name="cfcolor" value="0" /><span class="cf-swatch" style="background:#c8e6c9;color:#1b5e20">A</span></label>
+          <label class="cf-sw" title="Yellow"><input type="radio" name="cfcolor" value="1" /><span class="cf-swatch" style="background:#fff59d;color:#5d4b00">A</span></label>
+          <label class="cf-sw on" title="Red"><input type="radio" name="cfcolor" value="2" checked /><span class="cf-swatch" style="background:#ffcdd2;color:#7f1d0c">A</span></label>
+          <label class="cf-sw" title="Blue"><input type="radio" name="cfcolor" value="3" /><span class="cf-swatch" style="background:#bbdefb;color:#0d3b66">A</span></label>
+        </div>
+        <ul id="cfList" class="cf-list"></ul>
+        <div class="modal-actions">
+          <button id="cfClose" class="btn">Close</button>
+          <button id="cfAdd" class="btn btn-primary">Add rule</button>
+        </div>
+      </div>
     </div>
 
     <!-- ======= Confirm modal ======= -->

@@ -418,6 +418,7 @@ const state = {
   history: [],
   historyIndex: -1,
   formats: {},      // { "r,c": {bold?,italic?,underline?,align?,wrap?} } — per-cell overrides
+  cfRules: [],       // conditional-formatting rules (see the Conditional-formatting section)
 };
 // Per-cell formatting: { "r,c": {bold,italic,underline,align,wrap} } — values
 // are set only when they differ from the default so snapshots stay compact.
@@ -427,13 +428,14 @@ const HISTORY_MAX = 50; // cap undo snapshots so a large grid doesn't bloat memo
 let isSaved = true; // false once the grid diverges from any exported/saved file
 let windowState = null; // { start, end, vis } shared by renderBody() and renderStats()
 
-const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {} });
+const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {}, cfRules: state.cfRules || [] });
 const restore = (snap) => {
   const d = JSON.parse(snap);
   state.headers = d.headers;
   state.rows = d.rows;
   state.colCount = d.headers.length;
   state.formats = d.formats || {};
+  state.cfRules = d.cfRules || [];
 };
 
 /* ============ DOM refs ============ */
@@ -1103,10 +1105,14 @@ function rowHtml(i, cls) {
         ef.bold ? "f-bold" : "", ef.italic ? "f-italic" : "", ef.underline ? "f-underline" : "",
         "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
       ].filter(Boolean).join(" ");
+      // Conditional formatting: apply first matching rule's colors as CSS vars.
+      let cfStyleAttr = "";
+      const cfStyle = cfApply(i, c);
+      if (cfStyle) { cls += " cf-on"; cfStyleAttr = ` style="--cf-bg:${cfStyle.bg};--cf-fg:${cfStyle.fg}"`; }
       const spanCls = dispText === "" ? "cell-display is-empty" : "cell-display";
       const dataT = isErr ? "error" : (resolvedNum !== null ? "number" : ti.type);
       const titleAttr = isF ? ` title="${escAttr("= " + val.trim().slice(1) + "  →  " + dispText)}"` : "";
-      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${dataT}"${titleAttr}><span class="${spanCls}">${dispText === "" ? "&nbsp;" : esc(dispText)}</span></td>`;
+      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${dataT}"${cfStyleAttr}${titleAttr}><span class="${spanCls}">${dispText === "" ? "&nbsp;" : esc(dispText)}</span></td>`;
     }
   }
   h += `<td class="rowdel"><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
@@ -1524,6 +1530,7 @@ function resetState(keepFilename) {
   state.history = [];
   state.historyIndex = -1;
   state.formats = {};
+  state.cfRules = [];
   if (!keepFilename) filenameInput.value = "untitled";
   applyStoredWidths();
   // every resetState() call is a fresh load -> grid matches source, not dirty
@@ -2173,6 +2180,140 @@ copyAsMenu.addEventListener("click", (e) => {
   else if (fmt === "json") copyAsJson();
   else if (fmt === "sql") copyAsSql();
 });
+
+/* ============ Conditional formatting (rule engine + modal) ============
+   A rule = { range:{r1,r2,c1,c2}|null(all), kind, param?, n?, style:{bg,fg} }.
+   kind: is, not, gt, gte, lt, lte, contains, between, topn, bottomn, blank, notblank.
+   cfApply(r,c) returns the FIRST matching rule's style (inline), or null.
+   Styles are drawn via --cf-bg / --cf-fg custom props so selection still shows. */
+const CF_PRESETS = [
+  { bg: "#c8e6c9", fg: "#1b5e20" },  // green
+  { bg: "#fff59d", fg: "#5d4b00" },  // yellow
+  { bg: "#ffcdd2", fg: "#7f1d0c" },  // red
+  { bg: "#bbdefb", fg: "#0d3b66" },  // blue
+];
+const CF_KINDS = [
+  ["is","is"],["not","is not"],["gt",">","is greater than"],["gte",">=","is at least"],
+  ["lt","<","is less than"],["lte","<=","is at most"],
+  ["contains","contains"],["between","between"],
+  ["topn","top N"],["bottomn","bottom N"],["blank","is blank"],["notblank","is not blank"],
+];
+
+function cfInRange(rule, r, c) {
+  const b = rule.range;
+  if (!b) return true;
+  return r >= b.r1 && r <= b.r2 && c >= b.c1 && c <= b.c2;
+}
+function cfMatchKind(rule, r, c) {
+  const raw = state.rows[r] && state.rows[r][c];
+  const s = raw === undefined || raw === null ? "" : String(raw);
+  // Resolve formula cells to their computed value so numeric rules compare numbers.
+  const resolved = (s.trim().startsWith("=")) ? cellValueText(r, c) : raw;
+  const n = (v) => { const x = toNumberCore(v === undefined ? "" : String(v)); return x; };
+  const rv = n(resolved);
+  switch (rule.kind) {
+    case "blank":    return s.trim() === "";
+    case "notblank": return s.trim() !== "";
+    case "is":       return s === String(rule.param);
+    case "not":      return s !== String(rule.param);
+    case "contains": return s.toLowerCase().includes(String(rule.param).toLowerCase());
+    case "gt":  { const a = rv, b = n(rule.param); return a !== null && b !== null && a > b; }
+    case "lt":  { const a = rv, b = n(rule.param); return a !== null && b !== null && a < b; }
+    case "gte": { const a = rv, b = n(rule.param); return a !== null && b !== null && a >= b; }
+    case "lte": { const a = rv, b = n(rule.param); return a !== null && b !== null && a <= b; }
+    case "between": { const a = rv, lo = n(rule.param.lo), hi = n(rule.param.hi);
+                      return a !== null && lo !== null && hi !== null && a >= lo && a <= hi; }
+    case "topn":
+    case "bottomn": {
+      // threshold across the column (c) within the rule's range, resolving formulas
+      const b = rule.range || { r1: 0, r2: state.rows.length - 1 };
+      const colVal = (rr) => { const x = state.rows[rr] && state.rows[rr][c]; const str = x === undefined ? "" : String(x); return toNumberCore(str.trim().startsWith("=") ? cellValueText(rr, c) : str); };
+      const vals = [];
+      for (let rr = b.r1; rr <= b.r2; rr++) { const nn = colVal(rr); if (nn !== null) vals.push(nn); }
+      vals.sort((x, y) => (rule.kind === "topn" ? y - x : x - y));
+      const kk = Math.max(1, rule.n | 0);
+      if (!vals.length) return false;
+      const threshold = vals[Math.min(kk, vals.length) - 1];
+      if (rv === null) return false;
+      return rule.kind === "topn" ? rv >= threshold - 1e-9 : rv <= threshold + 1e-9;
+    }
+  }
+  return false;
+}
+function cfApply(r, c) {
+  for (const rule of (state.cfRules || [])) {
+    if (!cfInRange(rule, r, c)) continue;
+    if (cfMatchKind(rule, r, c)) return rule.style;
+  }
+  return null;
+}
+
+// ---- Modal wiring ----
+const cfRoot = $("cfRoot"), cfList = $("cfList");
+const kindSel = $("cfKind"), paramIn = $("cfParam"), paramLo = $("cfParamLo"), paramHi = $("cfParamHi"), topnIn = $("cfTopN");
+const cfParamWrap = $("cfParamWrap"), cfTopWrap = $("cfTopWrap"), cfBetween = document.querySelector(".cf-between");
+function cfShowParam(kind) {
+  const isTxt = kind === "is" || kind === "not" || kind === "contains";
+  const isNum = ["gt","gte","lt","lte"].includes(kind);
+  const isBetween = kind === "between";
+  const isTop = kind === "topn" || kind === "bottomn";
+  if (cfParamWrap) cfParamWrap.style.display = (isTxt || isNum) ? "" : "none";
+  paramIn.placeholder = isTxt ? "value" : "number";
+  if (cfBetween) cfBetween.style.display = isBetween ? "" : "none";
+  if (cfTopWrap) cfTopWrap.style.display = isTop ? "" : "none";
+}
+function cfSelectedRange() {
+  if (sel) return { r1: sel.r1, r2: sel.r2, c1: sel.c1, c2: sel.c2 };
+  return { r1: 0, r2: Math.max(0, state.rows.length - 1), c1: 0, c2: state.headers.length - 1 };
+}
+function cfAddRule() {
+  const kind = kindSel.value;
+  const param = paramIn.value.trim();
+  if (["is","not","contains","gt","gte","lt","lte"].includes(kind) && param === "") { showToast("Enter a value for that condition", "error"); return; }
+  const colorInput = document.querySelector('input[name="cfcolor"]:checked');
+  const style = CF_PRESETS[+(colorInput ? colorInput.value : 2)];
+  const rule = { range: cfSelectedRange(), kind, style };
+  if (["gt","gte","lt","lte","is","not","contains"].includes(kind)) rule.param = param;
+  else if (kind === "between") rule.param = { lo: paramLo.value.trim(), hi: paramHi.value.trim() };
+  else if (kind === "topn" || kind === "bottomn") rule.n = Math.max(1, parseInt(topnIn.value, 10) || 3);
+  state.cfRules.push(rule);
+  pushHistory(); render();
+  cfPaintList();
+  showToast("Rule added");
+}
+function cfPaintList() {
+  cfList.innerHTML = (state.cfRules || []).map((r, i) => {
+    const label = `${CF_KINDS.find(k => k[0] === r.kind)[1]} ${r.param ? (typeof r.param === "object" ? r.param.lo+"–"+r.param.hi : r.param) : (r.n ? r.n : "")}`;
+    return `<li>
+      <button type="button" class="cf-dot" style="background:${r.style.bg};color:${r.style.fg}" aria-hidden="true"></button>
+      <span class="cf-rule-txt">${esc(label)}</span>
+      <button type="button" class="button" data-cf-del="${i}" aria-label="Remove rule">×</button>
+    </li>`;
+  }).join("") || `<li class="cf-none">No rules yet — select a range, pick a condition, and add one.</li>`;
+}
+function openCf() {
+  kindSel.value = "is"; cfShowParam("is");
+  paramIn.value = ""; paramLo.value = ""; paramHi.value = ""; topnIn.value = 3;
+  document.querySelector('input[name="cfcolor"][value="2"]').checked = true;
+  cfPaintList();
+  cfRoot.hidden = false;
+}
+function closeCf() { cfRoot.hidden = true; }
+const btnCf = $("btnCf");
+btnCf && btnCf.addEventListener("click", openCf);
+cfRoot && cfRoot.querySelector("#cfClose") && cfRoot.querySelector("#cfClose").addEventListener("click", closeCf);
+cfRoot && cfRoot.querySelector("#cfAdd") && cfRoot.querySelector("#cfAdd").addEventListener("click", cfAddRule);
+kindSel && kindSel.addEventListener("change", () => cfShowParam(kindSel.value));
+cfList && cfList.addEventListener("click", (e) => {
+  const del = e.target.closest("[data-cf-del]");
+  if (!del) return;
+  const i = +del.dataset.cfDel;
+  state.cfRules.splice(i, 1);
+  pushHistory(); render(); cfPaintList();
+  showToast("Rule removed");
+});
+if (cfRoot) cfRoot.addEventListener("click", (e) => { if (e.target === cfRoot) closeCf(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cfRoot && !cfRoot.hidden) closeCf(); });
 
 /* ============ Fill (productivity) ============
    Fill down: every row in the selection becomes a copy of the top row's cells.
@@ -3515,6 +3656,8 @@ Object.defineProperty(window, "__tabula", {
     get chart() { return chart; }, chartTheme,
     copyAsBounds, copyAsMarkdown, copyAsJson, copyAsSql,
     markdownOfBounds, jsonOfBounds, sqlOfBounds,
+    // Conditional formatting (rule engine — pure predicate exposed for tests)
+    cfApply, cfInRange, cfMatchKind, openCf, closeCf, cfPaintList,
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,
