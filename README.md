@@ -9,10 +9,18 @@ Everything runs locally in your browser; **your data never leaves your machine**
 index.html   →  the page shell
 styles.css   →  the design system
 app.js       →  all application logic
-parsing.worker.js →  large-file parsing off the main thread
-```
+ parsing.worker.js →  large-file parsing off the main thread
+  ```
 
- That's the whole project. No `package.json`, no bundler, no dependencies.
+That's the whole project. No `package.json`, no bundler, no dependencies.
+
+## Keyboard‑driven
+
+Everything you do has a shortcut — and you can bring them all up in‑app with
+**`?`** (or the hint in the status bar): arrow navigation, `Shift+Arrow` range
+extension, `Enter`/`Tab` commit, `F2` formula‑bar edit, `⌘/Ctrl+C/Z/S/D`,
+`⌘/Ctrl+B/I/U` formatting, and more. It's fast even at scale because only the
+visible rows are in the DOM.
 
 > **Live demo →** [akhlas17.github.io/web-based-csv-editor](https://akhlas17.github.io/web-based-csv-editor/)
 

@@ -1326,6 +1326,12 @@ document.addEventListener("mousedown", (e) => {
 function isCellInput(el) {
   return el && el.classList && el.classList.contains("cell-input");
 }
+function isInTextTarget(el) {
+  if (!el || el === document.body || !el.tagName) return false;
+  const t = el.tagName;
+  if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return true;
+  return el.isContentEditable === true;
+}
 function arrowDelta(key) {
   if (key === "ArrowUp") return [-1, 0];
   if (key === "ArrowDown") return [1, 0];
@@ -1389,6 +1395,10 @@ function handleGridKey(e) {
 document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  // "?" opens the shortcuts overlay (only when not typing in a text control)
+  if (e.key === "?" && !mod && !isInTextTarget(document.activeElement)) {
+    e.preventDefault(); openShortcuts(); return;
+  }
   if (mod && !e.altKey && k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && k === "s") { e.preventDefault(); exportCsv(); return; }
   if (mod && k === "c" && sel) { e.preventDefault(); copySelectionRange(); return; }
@@ -1402,6 +1412,7 @@ document.addEventListener("keydown", (e) => {
     if (k === "u") { e.preventDefault(); applyFmt("fmtUnder", "underline"); return; }
   }
   if (e.key === "Escape") {
+    if (!helpRoot.hidden) { closeShortcuts(); return; }
     if (isCellInput(document.activeElement)) { state.editingRow = -1; state.editingCol = -1; render(); }
     else if (sel) { e.preventDefault(); clearSel(); }
     hideCtxMenu();
@@ -1410,6 +1421,14 @@ document.addEventListener("keydown", (e) => {
   if (isCellInput(document.activeElement)) { handleEditingKey(e); return; }
   handleGridKey(e);
 });
+
+/* ============ Shortcuts overlay (?) ============ */
+const helpRoot = $("helpRoot");
+const helpClose = $("helpClose");
+function openShortcuts() { helpRoot.hidden = false; helpClose.focus(); }
+function closeShortcuts() { helpRoot.hidden = true; }
+if (helpClose) helpClose.addEventListener("click", closeShortcuts);
+if (helpRoot) helpRoot.addEventListener("click", (e) => { if (e.target === helpRoot) closeShortcuts(); });
 
 /* ============ Row / column ops ============ */
 function addRow() {
@@ -3658,6 +3677,8 @@ Object.defineProperty(window, "__tabula", {
     markdownOfBounds, jsonOfBounds, sqlOfBounds,
     // Conditional formatting (rule engine — pure predicate exposed for tests)
     cfApply, cfInRange, cfMatchKind, openCf, closeCf, cfPaintList,
+    // Shortcuts overlay
+    openShortcuts, closeShortcuts, isInTextTarget,
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,

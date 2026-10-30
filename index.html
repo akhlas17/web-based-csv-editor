@@ -276,9 +276,9 @@
           <button type="button" data-sigma="clear">Clear selected cells</button>
           <button type="button" data-sigma="delrows" class="danger" data-danger>Delete selected rows</button>
         </div>
-        <span class="stat mono kbd-hints">
-          <kbd>Click</kbd> select · <kbd>Shift+Arrow</kbd> range · <kbd>DblClick</kbd> edit · <kbd>Del</kbd> clear
-        </span>
+<span class="stat mono kbd-hints">
+  <kbd>Click</kbd> select · <kbd>Shift+Arrow</kbd> range · <kbd>DblClick</kbd> edit · <kbd>Del</kbd> clear · <kbd>?</kbd> shortcuts
+</span>
       </div>
     </footer>
 
@@ -414,6 +414,49 @@
         <div class="modal-actions">
           <button id="cfClose" class="btn">Close</button>
           <button id="cfAdd" class="btn btn-primary">Add rule</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= Shortcuts overlay (?) ======= -->
+    <div id="helpRoot" class="modal-root" hidden>
+      <div class="modal-card help-card" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <div class="help-head">
+          <h3>Keyboard shortcuts</h3>
+          <button id="helpClose" class="btn help-close" title="Close" type="button">Close</button>
+        </div>
+        <div class="help-grid">
+          <div class="help-group">
+            <div class="help-label">Editing</div>
+            <div class="help-item"><kbd>Enter</kbd><span>commit &amp; move down</span></div>
+            <div class="help-item"><kbd>Tab</kbd><span>commit &amp; move right</span></div>
+            <div class="help-item"><kbd>F2</kbd><span>edit in formula bar</span></div>
+            <div class="help-item"><kbd>Esc</kbd><span>cancel edit</span></div>
+            <div class="help-item"><kbd>Space</kbd><span>start editing cell</span></div>
+          </div>
+          <div class="help-group">
+            <div class="help-label">Selection &amp; nav</div>
+            <div class="help-item"><kbd>Arrows</kbd><span>move active cell</span></div>
+            <div class="help-item"><kbd>Shift+Arrows</kbd><span>extend selection</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+A</kbd><span>select the whole grid</span></div>
+            <div class="help-item"><kbd>Del</kbd><span>clear selected cells</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+C</kbd><span>copy selection</span></div>
+          </div>
+          <div class="help-group">
+            <div class="help-label">Document</div>
+            <div class="help-item"><kbd>⌘/Ctrl+Z</kbd><span>undo</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+⇧+Z</kbd><span>redo</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+S</kbd><span>export / save CSV</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+D</kbd><span>fill down</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+⇧+R</kbd><span>fill right</span></div>
+          </div>
+          <div class="help-group">
+            <div class="help-label">Formatting</div>
+            <div class="help-item"><kbd>⌘/Ctrl+B</kbd><span>bold</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+I</kbd><span>italic</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+U</kbd><span>underline</span></div>
+            <div class="help-item"><kbd>? </kbd><span>show this help</span></div>
+          </div>
         </div>
       </div>
     </div>

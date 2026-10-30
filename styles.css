@@ -916,6 +916,28 @@ tr.pad { height: 0; }
 .modal-card p .mono { font-family: var(--mono); color: var(--accent); font-weight: 600; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
+/* ---------- Shortcuts (?) overlay ---------- */
+.help-card { width: min(680px, 94vw); }
+.help-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.help-head h3 { margin: 0 0 12px; }
+.help-close { flex: none; }
+.help-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 640px) { .help-grid { grid-template-columns: repeat(2, 1fr); } }
+.help-group { display: flex; flex-direction: column; gap: 6px; }
+.help-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 2px;
+}
+.help-item { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-dim); min-width: 0; }
+.help-item span { flex: 1 1 auto; min-width: 0; }
+.help-item kbd {
+  flex: none; font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 6px; padding: 2px 7px; white-space: nowrap;
+}
+.help-head h3 { font-size: 16px; font-weight: 700; }
+
 /* ---------- Chart card ---------- */
 .chart-card { width: min(560px, 94vw); padding: 18px 18px 14px; }
 .chart-card h3 { margin-bottom: 6px; }
