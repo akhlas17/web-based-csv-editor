@@ -91,6 +91,9 @@ const dot = $("dot");
 const searchInput = $("search");
 const searchClear = $("searchClear");
 const statCounts = $("statCounts");
+const gridChip = $("gridChip");
+const gridRows = $("gridRows");
+const gridCols = $("gridCols");
 const statSort = $("statSort");
 const statSearch = $("statSearch");
 const btnUndo = $("btnUndo");
@@ -138,6 +141,12 @@ function markDirty() {
 }
 function updateDirty() {
   dot.hidden = isSaved;
+}
+// Live grid-size chip in the top bar (rows × columns), kept in sync on every render.
+function updateGridChip() {
+  if (!gridRows || !gridCols) return;
+  gridRows.textContent = state.rows.length;
+  gridCols.textContent = state.headers.length;
 }
 let autosaveTimer = null;
 function scheduleAutosave() {
@@ -287,6 +296,7 @@ function render() {
     head.innerHTML = "<tr><th class='colnum'>&nbsp;</th></tr>";
     body.innerHTML = "";
     scroller.scrollTop = 0;
+    updateGridChip();
     statCounts.textContent = "empty grid";
     statSort.hidden = true;
     statSearch.hidden = true;
@@ -449,6 +459,7 @@ function scrollToEnd() {
 
 function renderStats() {
   updateDirty();
+  updateGridChip();
   statCounts.textContent = `${state.rows.length} rows × ${state.headers.length} columns`;
   if (state.sortCol >= 0) {
     const h = state.headers[state.sortCol] || "Column " + (state.sortCol + 1);

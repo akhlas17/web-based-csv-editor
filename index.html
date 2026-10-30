@@ -12,27 +12,42 @@
 </head>
 <body>
   <div id="app">
-    <!-- ======= Top bar: brand + filename ======= -->
+    <!-- ======= Top bar: brand + filename + actions (command bar) ======= -->
     <header class="topbar">
+      <div class="accent-rail" aria-hidden="true"></div>
+
       <div class="brand">
         <span class="logo" aria-hidden="true">
           <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="7" fill="url(#g)"/>
+            <rect width="32" height="32" rx="8" fill="url(#g)"/>
             <path d="M8 10h16v2H8zM8 15h10v2H8zM8 20h13v2H8z" fill="white"/>
             <defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32">
-              <stop stop-color="#83a5ff"/><stop offset="1" stop-color="#5b7cfa"/>
+              <stop stop-color="#83a5ff"/><stop offset="1" stop-color="#3b82f6"/>
             </linearGradient></defs>
           </svg>
         </span>
-        <span class="brand-name">Tabula</span>
-        <span class="brand-tag">CSV&nbsp;Editor</span>
+        <span class="brand-txt">
+          <span class="brand-name">Tabula</span>
+          <span class="brand-tag">CSV&nbsp;Editor</span>
+        </span>
       </div>
 
+      <span class="topbar-sep" aria-hidden="true"></span>
+
       <div class="file-identity">
+        <svg class="file-icon" width="13" height="13" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M13 3v6h6"/></svg>
         <input id="filename" class="filename" type="text" value="untitled.csv" spellcheck="false"
-               title="File name (used for export)" />
+               title="File name (used for export)" aria-label="File name" />
         <span id="dot" class="dirty-dot" title="Unsaved changes" hidden></span>
       </div>
+
+      <span class="grid-chip" id="gridChip" title="Rows × Columns">
+        <span class="gc" id="gridRows" data-rows>9</span>
+        <span class="gc-sep">×</span>
+        <span class="gc" id="gridCols" data-cols>5</span>
+      </span>
 
       <div class="top-actions">
         <button id="btnTheme" class="btn icon-btn" title="Toggle dark mode" type="button" aria-label="Toggle dark mode">
@@ -40,16 +55,18 @@
           <svg class="ico-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
         <label class="btn" title="Open a .csv file from disk">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/></svg>
           Open
           <input id="fileInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" hidden />
         </label>
+
         <div class="export-wrap">
           <button id="btnExport" class="btn btn-primary" title="Download as CSV (Ctrl+S)" type="button">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Export</span>
           </button>
           <button id="btnExportMenu" class="btn btn-primary caret" title="More export formats" type="button" aria-haspopup="menu" aria-expanded="false">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
           </button>
           <div id="exportMenu" class="popover" hidden role="menu" aria-label="Export format">
             <div class="menu-label">Export as</div>
