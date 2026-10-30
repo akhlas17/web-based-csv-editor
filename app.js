@@ -45,6 +45,361 @@ function toCsv(headers, rows, delim = ",") {
   return out.map(r => r.map(q).join(delim)).join("\n");
 }
 
+/* ============ Formula engine ============
+   A cell holds a formula when its text starts with "=" (after trim).
+   Everything else is plain text, so old grids keep working unchanged.
+
+   Grammar (lowest → highest precedence):
+     expr   := term  ( ("+" | "-") term )*
+     term   := factor ( ("*" | "/") factor )* ["%"]       "%": trailing /100
+     factor := ("+" | "-") factor | primary
+     primary:= NUMBER | "string" | IDENT "(" expr ("," expr)* ")"
+              | IDENT (":" IDENT)?                         A1 · C:C · A1:B3 · alias
+
+   Functions (case-insensitive): SUM, AVERAGE, MIN, MAX, COUNT.
+   References: cell A1, column C:C, range A1:B5, and header-name aliases:
+   "=SUM(Salary)" works when a header is "Salary"; "=Salary*0.10" uses the
+   column's first data row (per-row math still uses explicit A1 refs).
+   Errors (spreadsheet-style, they propagate):
+   #CYCLE! circular · #REF! bad reference · #NAME? unknown function ·
+   #VALUE! bad operand · #DIV/0! division by zero.
+
+   Results are only recomputed when a render() happens (i.e. when the grid
+   changed); formulas never mutate the data. */
+class FErr {
+  constructor(text) { this.text = text; }
+  toString() { return this.text; }
+}
+const F_FUNCTS = {
+  sum:     nums => nums.reduce((a, b) => a + b, 0),
+  average: nums => (nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null),
+  min:     nums => (nums.length ? Math.min.apply(null, nums) : null),
+  max:     nums => (nums.length ? Math.max.apply(null, nums) : null),
+  count:   nums => nums.length,
+};
+function ftokenize(src) {
+  const toks = [];
+  let i = 0;
+  const isD = c => c >= "0" && c <= "9";
+  while (i < src.length) {
+    const c = src[i];
+    if (c === " " || c === "\t") { i++; continue; }
+    if (isD(c)) {
+      let j = i;
+      while (j < src.length && isD(src[j])) j++;
+      if (j < src.length && src[j] === "." && isD(src[j + 1] || "0")) {
+        j++;
+        while (j < src.length && isD(src[j])) j++;
+      }
+      toks.push({ t: "num", v: parseFloat(src.slice(i, j)) });
+      i = j; continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++;
+      toks.push({ t: "id", v: src.slice(i, j).toUpperCase() });
+      i = j; continue;
+    }
+    if (c === '"') {
+      let j = i + 1, s = "";
+      while (j < src.length && src[j] !== '"' && src[j] !== "\n") {
+        if (src[j] === "\\" && j + 1 < src.length) { s += src[j + 1]; j += 2; }
+        else { s += src[j]; j++; }
+      }
+      if (j >= src.length) throw new FErr("#VALUE!");
+      toks.push({ t: "str", v: s });
+      i = j + 1; continue;
+    }
+    if ("+-*/%():,".indexOf(c) >= 0) { toks.push({ t: c }); i++; continue; }
+    throw new FErr("#VALUE!");
+  }
+  return toks;
+}
+// Recursive-descent parser. Nodes:
+//   {v: num} | {v: string} | {fn, args[]} | {ref: "A1"} | {ref: "A1:B3"} |
+//   {op: "+|-*|/|neg", l, r?} — evaluated by fEvalNode.
+function fParse(src) {
+  const toks = ftokenize(src);
+  if (!toks.length) throw new FErr("#VALUE!");
+  let p = 0;
+  const peek = () => toks[p];
+  const take = () => toks[p++];
+  function expr() {
+    let n = term();
+    for (;;) {
+      const t = peek();
+      if (t && (t.t === "+" || t.t === "-")) { take(); n = { op: t.t, l: n, r: term() }; }
+      else break;
+    }
+    return n;
+  }
+  function term() {
+    let n = factor();
+    for (;;) {
+      const t = peek();
+      if (t && (t.t === "*" || t.t === "/")) { take(); n = { op: t.t, l: n, r: factor() }; }
+      else break;
+    }
+    return n;
+  }
+  function factor() {
+    const t = peek();
+    if (t && (t.t === "+" || t.t === "-")) {
+      take();
+      const n = factor();
+      return t.t === "-" ? { op: "neg", l: n } : n;
+    }
+    let n = primary();
+    // "%" is a postfix on a single factor (Excel semantics): 16% → 0.16, so
+    // "16%*100" = 16 rather than "(16*100)%" .
+    const t2 = peek();
+    if (t2 && t2.t === "%") { take(); n = { op: "pct", l: n }; }
+    return n;
+  }
+  function primary() {
+    const t = take();
+    if (t.t === "num" || t.t === "str") return { v: t.v };
+    if (t.t === "(") {
+      const n = expr();
+      const c = take();
+      if (c.t !== ")") throw new FErr("#VALUE!");
+      return n;
+    }
+    if (t.t === "id") {
+      let nx = peek();
+      if (nx && nx.t === "(") {
+        take();
+        const args = [];
+        for (;;) {
+          if (peek() && peek().t === ")") { take(); break; }
+          args.push(expr());
+          const nx2 = peek();
+          if (nx2 && nx2.t === ",") { take(); continue; }
+          const c = take();
+          if (c.t !== ")") throw new FErr("#VALUE!");
+          break;
+        }
+        return { fn: t.v.toLowerCase(), args };
+      }
+      if (nx && nx.t === ":") {
+        take();
+        const b = take();
+        if (b.t !== "id") throw new FErr("#REF!");
+        return { ref: t.v + ":" + b.v };
+      }
+      return { ref: t.v };
+    }
+    throw new FErr("#VALUE!");
+  }
+  const root = expr();
+  if (p < toks.length) throw new FErr("#VALUE!");
+  return root;
+}
+// A–Z→0, AA–… (A=0, B=1 … Z=25, AA=26). Out of grid width → null.
+function fColIndex(letter) {
+  const up = String(letter).toUpperCase();
+  if (!/^[A-Z]{1,9}$/.test(up)) return null;
+  let c = 0;
+  for (let i = 0; i < up.length; i++) c = c * 26 + (up.charCodeAt(i) - 64);
+  c -= 1;
+  if (c < 0 || c >= state.headers.length) return null;
+  return c;
+}
+// Resolve a reference string to a list of [row, col] cells.
+//   A1 → one cell · C:C → whole column · A1:B3 → rectangle · A:B → two columns
+function fRefCells(ref) {
+  const parts = String(ref).trim().split(":");
+  if (parts.length < 1 || parts.length > 2) return { error: new FErr("#REF!") };
+  const parseOne = (s) => {
+    const m = /^([A-Za-z]{1,9})(\d+)?$/.exec(s.trim());
+    if (!m) return null;
+    const c = fColIndex(m[1]);
+    if (c === null) return null;
+    const r = m[2] ? parseInt(m[2], 10) - 1 : null;
+    if (r !== null && r > 1000000) return null;
+    return { c, r };
+  };
+  const a = parseOne(parts[0]);
+  if (!a) return { error: new FErr("#REF!") };
+  if (parts.length === 1) {
+    if (a.r === null) {                                  // whole column (e.g. SUM(A))
+      if (state.rows.length === 0) return { error: new FErr("#REF!") };
+      const cells = [];
+      for (let r = 0; r < state.rows.length; r++) cells.push([r, a.c]);
+      return { cells };
+    }
+    if (a.r >= state.rows.length) return { error: new FErr("#REF!") };
+    return { cells: [[a.r, a.c]] };
+  }
+  const b = parseOne(parts[1]);
+  if (!b) return { error: new FErr("#REF!") };
+  if (state.rows.length === 0) return { error: new FErr("#REF!") };
+  const r1 = a.r === null ? 0 : Math.min(a.r, state.rows.length - 1);
+  const r2 = b.r === null ? state.rows.length - 1 : Math.min(b.r, state.rows.length - 1);
+  if (r1 > r2) return { error: new FErr("#REF!") };
+  const c1 = Math.min(a.c, b.c), c2 = Math.max(a.c, b.c);
+  if ((r2 - r1 + 1) * (c2 - c1 + 1) > 200000) return { error: new FErr("#REF!") };
+  const cells = [];
+  for (let r = r1; r <= r2; r++)
+    for (let c = c1; c <= c2; c++) cells.push([r, c]);
+  return { cells };
+}
+// Evaluate a parsed node. `resolve(r, c)` returns {n, e, text?} for a
+// dependency cell (implemented by resolveCellInner with cycle tracking).
+// Returns { n: number|null, text?: string, e: FErr|null }.
+function fEvalNode(node, resolve) {
+  const fail = t => ({ n: null, e: new FErr(t) });
+  if (node === null) return { n: null, e: null };
+  if (node.v !== undefined) {
+    return typeof node.v === "number" ? { n: node.v, e: null }
+      : { n: null, text: node.v, e: null };
+  }
+  if (node.op === "neg") {
+    const r = fEvalNode(node.l, resolve);
+    if (r.e) return r;
+    return { n: r.n === null ? null : -r.n, e: null };
+  }
+  if (node.op === "pct") {
+    const r = fEvalNode(node.l, resolve);
+    if (r.e) return r;
+    return { n: r.n === null ? null : r.n / 100, e: null };
+  }
+  if (node.op) {
+    const L = fEvalNode(node.l, resolve), R = fEvalNode(node.r, resolve);
+    if (L.e) return L;
+    if (R.e) return R;
+    if (L.n === null || R.n === null) return fail("#VALUE!");
+    if (node.op === "+") return { n: L.n + R.n, e: null };
+    if (node.op === "-") return { n: L.n - R.n, e: null };
+    if (node.op === "*") return { n: L.n * R.n, e: null };
+    if (node.op === "/") {
+      if (R.n === 0) return fail("#DIV/0!");
+      return { n: L.n / R.n, e: null };
+    }
+    return fail("#VALUE!");
+  }
+  if (node.fn) {
+    const F = F_FUNCTS[node.fn];
+    if (!F) return fail("#NAME?");
+    const nums = [];
+    for (const a of node.args) {
+      if (a.ref) {
+        const rc = fRefCells(a.ref);
+        if (rc.error) {
+          // Header-name alias: SUM(Salary) → the column behind "Salary".
+          const hi = state.headers.findIndex(h => String(h).trim().toLowerCase() === a.ref.toLowerCase());
+          if (hi >= 0) {
+            for (let r = 0; r < state.rows.length; r++) {
+              const v = resolve(r, hi);
+              if (v.e) return { n: null, e: v.e };
+              if (v.n !== null) nums.push(v.n);
+            }
+            continue;
+          }
+          return { n: null, e: rc.error };
+        }
+        for (const [r, c] of rc.cells) {
+          const v = resolve(r, c);
+          if (v.e) return { n: null, e: v.e };
+          if (v.n !== null) nums.push(v.n);
+        }
+      } else {
+        const v = fEvalNode(a, resolve);
+        if (v.e) return { n: null, e: v.e };
+        if (v.n !== null) nums.push(v.n);
+      }
+    }
+    const res = F(nums);
+    if (res === null || res === undefined) return { n: null, e: null };
+    if (!isFinite(res)) return fail("#VALUE!");
+    return { n: res, e: null };
+  }
+  if (node.ref) {
+    const rc = fRefCells(node.ref);
+    if (rc.error) {
+      // Header alias used as a value: =Salary*0.10 → first data row of column
+      const hi = state.headers.findIndex(h => String(h).trim().toLowerCase() === node.ref.toLowerCase());
+      if (hi >= 0) {
+        const v = resolve(0, hi);
+        return v.e ? { n: null, e: v.e } : { n: v.n, e: null };
+      }
+      return { n: null, e: rc.error };
+    }
+    if (rc.cells.length === 1) {
+      const [r, c] = rc.cells[0];
+      const v = resolve(r, c);
+      return v.e ? { n: null, e: v.e } : { n: v.n, text: v.text, e: null };
+    }
+    return fail("#VALUE!"); // bare range as a value
+  }
+  return fail("#VALUE!");
+}
+function evalFormula(src, ctx) {
+  const body = String(src).trim().replace(/^=/, "");
+  if (!body) return { n: null, e: new FErr("#VALUE!") };
+  ctx = ctx || new Set();          // safe default — the public entry needs no arg
+  let root;
+  try { root = fParse(body); }
+  catch (err) { return { n: null, e: err instanceof FErr ? err : new FErr("#VALUE!") }; }
+  try { return fEvalNode(root, (r, c) => resolveCellInner(r, c, ctx)); }
+  catch (err) { return { n: null, e: err instanceof FErr ? err : new FErr("#VALUE!") }; }
+}
+// Resolve one cell to its *computed* value: { n: number|null, text?: string, e: FErr|null }
+function resolveCell(r, c) { return resolveCellInner(r, c, new Set()); }
+function cellIsFormula(r, c) {
+  const v = state.rows[r] && state.rows[r][c];
+  return typeof v === "string" && v.trim().charAt(0) === "=";
+}
+function resolveCellInner(r, c, ctx) {
+  if (r < 0 || r >= state.rows.length || c < 0 || c >= (state.headers.length || 0))
+    return { n: null, e: new FErr("#REF!") };
+  const v = state.rows[r][c];
+  if (typeof v !== "string" || v.trim().charAt(0) !== "=") {
+    const ti = typeInfo(v);
+    if (ti.type === "number" || ti.type === "percent" || ti.type === "currency")
+      return { n: ti.value, e: null };
+    return { n: null, text: v === undefined || v === null ? "" : String(v), e: null };
+  }
+  const k = r + "," + c;
+  if (ctx.has(k)) return { n: null, e: new FErr("#CYCLE!") };
+  ctx.add(k);
+  const out = evalFormula(v, ctx);
+  ctx.delete(k);
+  return out;
+}
+// The human-display text for a cell (grid paint). Plain cells return their
+// stored text verbatim; formula cells resolve to a formatted value.
+function cellDisplayText(r, c) {
+  const v = state.rows[r] && state.rows[r][c];
+  const raw = v === undefined || v === null ? "" : String(v);
+  if (raw.trim().charAt(0) !== "=") return raw;            // plain → original
+  const rv = resolveCell(r, c);
+  if (rv.e) return rv.e.text;
+  if (rv.n !== null) return fmtStat(rv.n);
+  if (rv.text !== undefined) return rv.text;
+  return raw;
+}
+// The RAW cell value for copy/export: plain cells return their stored text
+// (so "$1,234" copies as "$1,234"); formula cells resolve to a plain decimal
+// (1041000, not 1,041,000) so the CSV round-trips; errors pass through.
+function cellValueText(r, c) {
+  const v = state.rows[r] && state.rows[r][c];
+  const raw = v === undefined || v === null ? "" : String(v);
+  if (raw.trim().charAt(0) !== "=") return raw;            // plain → original
+  const rv = resolveCell(r, c);
+  if (rv.e) return rv.e.text;
+  if (rv.n !== null) return String(rv.n);
+  if (rv.text !== undefined) return rv.text;
+  return raw;
+}
+// Spreadsheet-style column letter for a 0-based index (0 → A, 25 → Z, 26 → AA).
+function colLetter(c) {
+  let s = "";
+  c = c + 1;
+  while (c > 0) { const d = (c - 1) % 26; s = String.fromCharCode(65 + d) + s; c = Math.floor((c - 1) / 26); }
+  return s;
+}
+
 /* ============ State ============
    Model: a real header row + data rows (spreadsheet-style).
    All arrays are equal length = colCount. */
@@ -94,6 +449,8 @@ const fileInput = $("fileInput");
 const filenameInput = $("filename");
 const dot = $("dot");
 const searchInput = $("search");
+const fxName = $("fxName");
+const fxInput = $("fxInput");
 const searchClear = $("searchClear");
 const statCounts = $("statCounts");
 const gridChip = $("gridChip");
@@ -297,7 +654,19 @@ function cmpTyped(a, b) {
 function applySort() {
   if (state.sortCol < 0 || state.sortDir === 0) return;
   const col = state.sortCol, dir = state.sortDir;
-  state.rows.sort((a, b) => cmpTyped(a[col] ?? "", b[col] ?? "") * dir);
+  // Compare by row *index* so formulas can be resolved with their true row.
+  const order = state.rows.map((_, i) => i);
+  const val = idx => {
+    const v = state.rows[idx][col];
+    if (typeof v !== "string" || v.trim().charAt(0) !== "=") return v === undefined ? "" : v;
+    const rv = resolveCell(idx, col);
+    if (rv.e) return v;                    // errors sort as text
+    if (rv.n !== null) return String(rv.n);
+    if (rv.text !== undefined) return rv.text;
+    return v;
+  };
+  order.sort((ia, ib) => cmpTyped(val(ia), val(ib)) * dir);
+  state.rows = order.map(i => state.rows[i]);
 }
 function toggleSort(col) {
   if (state.sortCol !== col) { state.sortCol = col; state.sortDir = 1; }
@@ -356,11 +725,18 @@ const TYPE_BADGE = {
 function columnType(c) {
   const counts = {};
   let nonEmpty = 0;
-  for (const row of state.rows) {
-    const v = row[c];
+  for (let i = 0; i < state.rows.length; i++) {
+    const v = state.rows[i][c];
     if (v === undefined || String(v).trim() === "") continue;
     nonEmpty++;
-    const t = typeInfo(v).type;
+    // Resolve formulas so a computed-number column is detected as numeric.
+    let t;
+    if (typeof v === "string" && v.trim().charAt(0) === "=") {
+      const rv = resolveCell(i, c);
+      if (rv.e) t = "text";
+      else if (rv.n !== null) t = "number";
+      else t = "text";
+    } else t = typeInfo(v).type;
     counts[t] = (counts[t] || 0) + 1;
   }
   if (nonEmpty === 0) return { type: "empty", label: "", cls: "", title: "Empty" };
@@ -694,16 +1070,32 @@ function rowHtml(i, cls) {
       ].filter(Boolean).join(" ");
       h += `<td class="cell editing${cellSel ? " sel-cell" : ""} ${fcls.trim()}" data-ri="${i}" data-c="${c}"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
     } else {
-      const ti = typeInfo(val);
+      const isF = typeof val === "string" && val.trim().charAt(0) === "=";
+      let dispText = val === undefined ? "" : String(val);
+      let isErr = false;
+      let resolvedNum = null;
+      if (isF) {
+        const rv = resolveCell(i, c);
+        if (rv.e) { dispText = rv.e.text; isErr = true; }
+        else if (rv.n !== null) { dispText = fmtStat(rv.n); resolvedNum = rv.n; }
+        else if (rv.text !== undefined) dispText = rv.text;
+      }
+      const ti = resolvedNum !== null
+        ? { type: "number", value: resolvedNum, negative: resolvedNum < 0 }
+        : isErr ? { type: "text", negative: false }
+        : typeInfo(val);
       const ef = effectiveFormat(i, c, ti.type);
       let cls = cellSel ? " sel-cell" : "";
       if (ti.negative) cls += " is-neg";
+      if (isErr) cls += " is-err";
       const fcls = [
         ef.bold ? "f-bold" : "", ef.italic ? "f-italic" : "", ef.underline ? "f-underline" : "",
         "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
       ].filter(Boolean).join(" ");
-      const spanCls = (val === "" || val === undefined) ? "cell-display is-empty" : "cell-display";
-      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${ti.type}"><span class="${spanCls}">${val === "" || val === undefined ? "&nbsp;" : esc(val)}</span></td>`;
+      const spanCls = dispText === "" ? "cell-display is-empty" : "cell-display";
+      const dataT = isErr ? "error" : (resolvedNum !== null ? "number" : ti.type);
+      const titleAttr = isF ? ` title="${escAttr("= " + val.trim().slice(1) + "  →  " + dispText)}"` : "";
+      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${dataT}"${titleAttr}><span class="${spanCls}">${dispText === "" ? "&nbsp;" : esc(dispText)}</span></td>`;
     }
   }
   h += `<td class="rowdel"><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
@@ -1390,17 +1782,18 @@ function applyCase(kind) {
   if (!sel) { showToast("Select cells first", "error"); return; }
   const list = selCellList();
   if (!list.length) return;
-  const n = list.length;
+  let n = list.length, skipped = 0;
   for (const [r, c] of list) {
     const s = state.rows[r][c] == null ? "" : String(state.rows[r][c]);
     if (s === "") continue;
+    if (s.trim().charAt(0) === "=") { skipped++; continue; } // don't mangle formulas
     if (kind === "lower") state.rows[r][c] = s.toLowerCase();
     else if (kind === "upper") state.rows[r][c] = s.toUpperCase();
     else if (kind === "title") state.rows[r][c] = s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
   }
   markDirty(); pushHistory(); render();
   const label = kind === "lower" ? "lowercase" : kind === "upper" ? "UPPERCASE" : "Title Case";
-  showToast(`Converted ${n} cell${n === 1 ? "" : "s"} to ${label}`);
+  showToast(`Converted ${n} cell${n === 1 ? "" : "s"} to ${label}${skipped ? ` (${skipped} formula untouched)` : ""}`);
 }
 exportMenu.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-delim]");
@@ -1920,8 +2313,17 @@ function computeStats(r1, c1, r2, c2) {
       const v = row[c];
       const s = v === undefined ? "" : String(v).trim();
       count++;
-      if (s === "") { empty++; continue; }
-      const ti = typeInfo(v);
+      // Formulas resolve to their computed value first; a formula error
+      // counts as text-ish (never leaks into the numeric aggregates).
+      let text = s;
+      if (s.charAt(0) === "=") {
+        const rv = resolveCell(r, c);
+        if (rv.e) { textCount++; continue; }
+        if (rv.n !== null) text = String(rv.n);
+        else if (rv.text !== undefined) text = rv.text;
+      }
+      if (text === "") { empty++; continue; }
+      const ti = typeInfo(text);
       if (ti.type === "number" || ti.type === "percent" || ti.type === "currency") {
         num.count++; num.sum += ti.value;
         if (ti.value < num.min) num.min = ti.value;
@@ -1988,7 +2390,81 @@ function updateSelection() {
   }
   updateSelStats();
   if (typeof updateFmtToolbar === "function") updateFmtToolbar();
+  if (typeof updateFxBar === "function") updateFxBar();
 }
+
+/* ---- Formula bar: name box + input for the active cell ---- */
+// The cell being edited was captured when the input gained focus, so that a
+// click on *another* cell first commits to this one (Excel semantics) and
+// then moves the selection.
+let fxTargetCell = null;
+function captureFxTarget() { fxTargetCell = activeCell() || null; }
+// Keep the name box and input in sync with the active cell without clobbering
+// an in-progress edit (only rewrite the input when it is not focused).
+function updateFxBar() {
+  if (!fxName || !fxInput) return;
+  const a = activeCell() && state.rows.length ? activeCell() : null;
+  if (!a) { fxName.textContent = "—"; if (document.activeElement !== fxInput) fxInput.value = ""; return; }
+  fxName.textContent = colLetter(a.c) + (a.r + 1);
+  if (document.activeElement !== fxInput) {
+    const raw = state.rows[a.r] && state.rows[a.r][a.c];
+    fxInput.value = raw === undefined || raw === null ? "" : String(raw);
+  }
+}
+function commitFxBar() {
+  if (!fxInput) return;
+  const a = fxTargetCell || activeCell();
+  fxTargetCell = null;
+  if (!a) { fxInput.blur(); return; }
+  const newVal = fxInput.value;
+  const old = state.rows[a.r] && state.rows[a.r][a.c];
+  if ((old === undefined || old === null ? "" : String(old)) !== newVal) {
+    state.rows[a.r][a.c] = newVal;
+    markDirty(); pushHistory();
+  }
+  if (document.activeElement === fxInput) fxInput.blur();
+  updateFxBar();
+  render();
+}
+function revertFxBar() {
+  if (!fxInput) return;
+  const a = fxTargetCell;
+  fxTargetCell = null;
+  if (a) {
+    const raw = state.rows[a.r] && state.rows[a.r][a.c];
+    fxInput.value = raw === undefined || raw === null ? "" : String(raw);
+  }
+  if (document.activeElement === fxInput) fxInput.blur();
+  render();
+}
+function focusFxBar() {
+  if (!fxInput) return;
+  fxInput.focus();
+  fxInput.select();
+}
+if (fxInput) {
+  fxInput.addEventListener("focus", () => captureFxTarget());
+  fxInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitFxBar(); }
+    else if (e.key === "Escape") { e.preventDefault(); revertFxBar(); }
+    e.stopPropagation(); // keep the grid keydown handler out of the formula bar
+  });
+  fxInput.addEventListener("dblclick", () => fxInput.select());
+  // Save-on-blur parity: focus moving elsewhere commits the pending edit.
+  fxInput.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (document.activeElement !== fxInput && document.activeElement !== searchInput) commitFxBar();
+    }, 0);
+  });
+}
+// F2 jumps into the formula bar for the active cell (Excel convention).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "F2") return;
+  if (fxInput && document.activeElement === fxInput) return;
+  if (!activeCell()) return;
+  e.preventDefault();
+  focusFxBar();
+});
 function updateSelStats() {
   const el = $("selStats"); if (!el) return;
   if (!sel) { el.hidden = true; el.innerHTML = ""; return; }
@@ -2055,7 +2531,7 @@ function copySelectionRange() {
   if (!sel) return false;
   const lines = [];
   for (let r = sel.r1; r <= sel.r2; r++) {
-    lines.push(state.rows[r].slice(sel.c1, sel.c2 + 1).map(v => String(v === undefined ? "" : v)).join("\t"));
+    lines.push(Array.from({ length: sel.c2 - sel.c1 + 1 }, (_, k) => cellValueText(r, sel.c1 + k)).join("\t"));
   }
   writeClipboard(lines.join("\n"))
     .then(() => showToast(`Selected range copied (${lines.length} row${lines.length === 1 ? "" : "s"})`))
@@ -2085,7 +2561,7 @@ function selectedRangeTsv() {
   if (!sel) return null;
   const lines = [];
   for (let r = sel.r1; r <= sel.r2; r++) {
-    lines.push(state.rows[r].slice(sel.c1, sel.c2 + 1).map(v => String(v === undefined ? "" : v)).join("\t"));
+    lines.push(Array.from({ length: sel.c2 - sel.c1 + 1 }, (_, k) => cellValueText(r, sel.c1 + k)).join("\t"));
   }
   return lines.join("\n");
 }
@@ -2528,11 +3004,16 @@ dropzone.addEventListener("drop", (e) => {
 });
 
 /* ============ Export ============ */
+// Resolve formulas to their computed values on export — a `=SUM(C:C)` cell
+// must download as its number, not as formula text. Plain cells pass through.
+function toExportRows(rows) {
+  return rows.map((r, i) => r.map((v, c) => cellValueText(i, c)));
+}
 function exportWithDelim(kind) {
   const delim = kind === "semicolon" ? ";" : kind === "tab" ? "\t" : ",";
   const ext = kind === "tab" ? "tsv" : "csv";
   if (state.rows.length === 0 && state.headers.length === 0) { showToast("Nothing to export", "error"); return; }
-  const csv = toCsv(state.headers, state.rows, delim);
+  const csv = toCsv(state.headers, toExportRows(state.rows), delim);
   const name = (filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
   const blob = new Blob([csv + "\n"], { type: kind === "tab" ? "text/tab-separated-values;charset=utf-8" : "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -2604,6 +3085,13 @@ Object.defineProperty(window, "__tabula", {
     selectWholeGrid, activeCell, isMulti,
     render,
     pushHistory,
+    // Formula engine (pure, testable) + helpers
+    evalFormula,
+    resolveCell,
+    cellDisplayText,
+    cellValueText,
+    colLetter,
+    updateFxBar, commitFxBar, revertFxBar, focusFxBar,
     applyFormatToSelection,
     clearFormatting,
     effectiveFormat,
@@ -2616,6 +3104,7 @@ Object.defineProperty(window, "__tabula", {
     columnType,
     loadSample,
     fillDown, fillRight, applyCase,
+    copySelectionRange, selectedRangeTsv,
     findNext, doReplace, openFind, closeFind,
     addRow, addColumn, deleteRow, deleteColumn,
     duplicateRow, moveRow,

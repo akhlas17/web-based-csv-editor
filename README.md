@@ -54,6 +54,20 @@ Then open a file (or drop it onto the window) and you're editing.
   `Ctrl/Cmd+B/I/U`), **Align** left / center / right, **Word wrap** (tall rows
   for wrapped text), and **Clear formatting** — applied to any selection, all
   in the context menu too, all undo-able and remembered with the file
+- **Formulas** — type `=` into any cell (or the formula bar) and compute:
+  - **Arithmetic** — `+ - * / ( )`, unary minus, Excel-style trailing `%`
+    (`=Salary*0.10`, `=16%*100`)
+  - **Functions** — `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT` over a cell, range
+    (`A1:B3`), whole column (`C:C`), or a **header-name alias** (`=SUM(Salary)`)
+  - **Live recompute** — values update as source cells change; **circular
+    references are caught** and show `#CYCLE!`; errors (`#DIV/0!`, `#VALUE!`,
+    `#REF!`, `#NAME?`) render right in the grid like Excel
+  - **Integrates everywhere** — resolved values drive the grid (right-aligned
+    numbers), the statistics bar, sorting, and copy & export (`Ctrl+C` and
+    `Ctrl/Cmd+S` yield computed values, not formula text)
+  - **Formula bar** — name box (`C3`) + editable input; `Enter` commits,
+    `Esc` reverts, `F2` jumps in; clicking another cell commits first, then
+    moves (Excel semantics)
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case

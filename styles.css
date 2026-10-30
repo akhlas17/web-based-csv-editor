@@ -37,6 +37,7 @@
   --radius-sm: 7px;
   --topbar-h: 56px;
   --toolbar-h: 46px;
+  --fxbar-h: 28px;
   --statusbar-h: 34px;
   --font-ui: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-grid: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -136,7 +137,7 @@ kbd {
   height: 100vh;
 }
 /* simpler fixed layout */
-#app { grid-template-rows: var(--topbar-h) var(--toolbar-h) 1fr var(--statusbar-h); grid-template-areas: "top" "toolbar" "grid" "status"; }
+#app { grid-template-rows: var(--topbar-h) var(--toolbar-h) var(--fxbar-h) 1fr var(--statusbar-h); grid-template-areas: "top" "toolbar" "formula" "grid" "status"; }
 
 /* ===================== Top bar — VS Code-style command bar =====================
    Palette (user spec):  bg #1E1E1E · surface-low #141414 · surface-high #2D2D2D
@@ -381,6 +382,59 @@ kbd {
   color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent-line);
 }
+
+/* ===================== Formula bar — Excel-style name box + input ===================== */
+.fxbar {
+  grid-area: formula;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--fxbar-h);
+  padding: 0 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  z-index: 4;
+}
+.fx-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  min-width: 34px;
+  text-align: center;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  flex: none;
+}
+.fx-sep { width: 1px; height: 16px; background: var(--border); flex: none; }
+.fx-glyph {
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-faint);
+  flex: none;
+  padding: 0 2px 0 0;
+}
+.fx-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 8px;
+  outline: none;
+  line-height: 1.4;
+}
+.fx-input::placeholder { color: var(--text-faint); font-style: italic; font-family: var(--font-ui); }
+.fx-input:hover { border-color: var(--border-strong); }
+.fx-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .sep { width: 1px; height: 20px; background: var(--border); margin: 0 3px; }
 
 /* ===================== Search ===================== */
@@ -652,6 +706,12 @@ td.f-align-center   .cell-display { text-align: center; }
 td.f-align-right    .cell-display { text-align: right; font-variant-numeric: tabular-nums; }
 /* Word wrap — normalise line breaking and let the row height follow */
 td.f-wrap .cell-display { white-space: normal; overflow-wrap: break-word; word-break: break-word; }
+/* Formula errors read like spreadsheet #REF! / #CYCLE! */
+td.cell.is-err .cell-display {
+  color: var(--danger);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
 
 /* in-cell editor */
 .cell .cell-input {
