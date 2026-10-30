@@ -37,17 +37,23 @@ Then open a file (or drop it onto the window) and you're editing.
   - `↑` `↓` `←` `→` — move the active cell
   - `Shift + ↑↓←→` — extend the selection range from the anchor (like Google Sheets)
   - `Ctrl/Cmd+A` — select the whole grid
+  - `Ctrl/Cmd+B` / `I` / `U` — bold / italic / underline the selection
   - `Backspace` / `Delete` — clear the selected cells
   - **Save on blur** — click away, press a key, or move on; the value is never lost
 - **Selection engine** — click a cell, row number, or column header; drag to
   multi-select; the whole grid, a row, a column, or any rectangular range
-- **Right-click context menu** — copy, paste, clear, case conversion, fill,
-  sort, auto-fit, insert/delete rows & columns, duplicate, and more
+- **Right-click context menu** — copy, paste, clear, case conversion, formatting,
+  fill, sort, auto-fit, insert/delete rows & columns, duplicate, and more
 - **Statistics bar** — live `Σ Sum` / `x̄ Average` / `min` / `max` / `n Count` for
   the selection, with a `Σ more` menu; understands `$`, `%`, `(1,234)` negatives,
   and dates
-- **Format** (Google-Sheets style, automatic): numbers right-align with tabular
-  figures, negatives highlight in red, dates and text align left
+- **Automatic formatting** (Google-Sheets style): numbers, percentages, currency
+  and dates right-align with tabular figures, negatives highlight in red, text
+  and booleans align left
+- **Manual formatting** — **Bold / Italic / Underline** (toolbar buttons, or
+  `Ctrl/Cmd+B/I/U`), **Align** left / center / right, **Word wrap** (tall rows
+  for wrapped text), and **Clear formatting** — applied to any selection, all
+  in the context menu too, all undo-able and remembered with the file
 - **Data tools**
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case

@@ -122,6 +122,40 @@
           </div>
         </div>
         <span class="sep"></span>
+        <div class="fmt-group" role="toolbar" aria-label="Formatting">
+          <button id="fmtBold" class="btn fmt-btn" title="Bold (Ctrl+B)" data-fmt="bold" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h8a4 4 0 0 1 0 8H6z"/><path d="M6 12h9a4 4 0 0 1 0 8H6z"/></svg>
+            <span>B</span>
+          </button>
+          <button id="fmtItalic" class="btn fmt-btn" title="Italic (Ctrl+I)" data-fmt="italic" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="4" x2="10" y2="4"/><line x1="14" y1="20" x2="5" y2="20"/><line x1="15" y1="4" x2="9" y2="20"/></svg>
+            <span>I</span>
+          </button>
+          <button id="fmtUnder" class="btn fmt-btn" title="Underline (Ctrl+U)" data-fmt="underline" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v6a6 6 0 0 0 12 0V4"/><line x1="5" y1="20" x2="19" y2="20"/></svg>
+            <span>U</span>
+          </button>
+          <span class="sep"></span>
+          <button id="fmtAlignL" class="btn fmt-btn" title="Align left" data-fmt="align-left" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="17" y2="18"/></svg>
+          </button>
+          <button id="fmtAlignC" class="btn fmt-btn" title="Align center" data-fmt="align-center" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="6" x2="19" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="6" y1="18" x2="18" y2="18"/></svg>
+          </button>
+          <button id="fmtAlignR" class="btn fmt-btn" title="Align right" data-fmt="align-right" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="7" y1="18" x2="20" y2="18"/></svg>
+          </button>
+          <span class="sep"></span>
+          <button id="fmtWrap" class="btn fmt-btn" title="Word wrap (on/off)" data-fmt="wrap" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13a3 3 0 0 1 0 6H7a3 3 0 0 0 0 6h11"/><polyline points="16 9 19 12 16 15"/></svg>
+            <span>wrap</span>
+          </button>
+          <button id="fmtClear" class="btn fmt-btn" title="Clear formatting" type="button" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 20 12 9 8 13 20 4 16 8 20 4"/><line x1="6" y1="16" x2="18" y2="16"/></svg>
+            <span>clear</span>
+          </button>
+        </div>
+        <span class="sep"></span>
         <button id="btnFind" class="btn" title="Find &amp; Replace (Ctrl+H)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <span>Find</span>

@@ -62,18 +62,23 @@ const state = {
   selectedCol: -1, // keyboard/copy anchor column
   history: [],
   historyIndex: -1,
+  formats: {},      // { "r,c": {bold?,italic?,underline?,align?,wrap?} } — per-cell overrides
 };
+// Per-cell formatting: { "r,c": {bold,italic,underline,align,wrap} } — values
+// are set only when they differ from the default so snapshots stay compact.
+// Lives in `state` so undo/redo and localStorage persisting cover it automatically.
 const LS_KEY = "tabula:v1";
 const HISTORY_MAX = 50; // cap undo snapshots so a large grid doesn't bloat memory
 let isSaved = true; // false once the grid diverges from any exported/saved file
 let windowState = null; // { start, end, vis } shared by renderBody() and renderStats()
 
-const save = () => JSON.stringify({ headers: state.headers, rows: state.rows });
+const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {} });
 const restore = (snap) => {
   const d = JSON.parse(snap);
   state.headers = d.headers;
   state.rows = d.rows;
   state.colCount = d.headers.length;
+  state.formats = d.formats || {};
 };
 
 /* ============ DOM refs ============ */
@@ -262,18 +267,37 @@ function clearFilters() {
 }
 
 /* ============ Sort ============ */
+// Type-aware ordering: numeric types (number/percent/currency) and
+// temporal types (date/datetime/time) compare by their comparable value;
+// booleans by true/false; everything else (text, unknown) as locale text;
+// empty cells always sink to the bottom regardless of direction.
+function sortKey(v) {
+  const ti = typeInfo(v);
+  if (ti.type === "empty") return { kind: "empty" };
+  if (ti.type === "number" || ti.type === "percent" || ti.type === "currency" ||
+      ti.type === "date" || ti.type === "datetime" || ti.type === "time" ||
+      ti.type === "boolean") return { kind: "value", value: ti.value };
+  return { kind: "text", text: String(v) };
+}
+function cmpTyped(a, b) {
+  const ka = sortKey(a), kb = sortKey(b);
+  if (ka.kind === "empty" && kb.kind === "empty") return 0;
+  if (ka.kind === "empty") return 1;            // empty always after
+  if (kb.kind === "empty") return -1;
+  if (ka.kind === "value" && kb.kind === "value") {
+    const d = ka.value - kb.value;
+    if (d !== 0) return d;
+    // Equal numeric value but different display (e.g. "1,000" vs "1000") → keep stable by text
+    return String(a).localeCompare(String(b), undefined, { numeric: true });
+  }
+  if (ka.kind === "text" && kb.kind === "text") return ka.text.localeCompare(kb.text, undefined, { numeric: true });
+  // Mixed types: value-types before text-types (deterministic)
+  return ka.kind === "value" ? -1 : 1;
+}
 function applySort() {
   if (state.sortCol < 0 || state.sortDir === 0) return;
   const col = state.sortCol, dir = state.sortDir;
-  state.rows.sort((a, b) => {
-    const av = String(a[col] ?? ""), bv = String(b[col] ?? "");
-    const an = Number(av.replace(/[$,\s]/g, ""));
-    const bn = Number(bv.replace(/[$,\s]/g, ""));
-    if (av !== "" && av.trim() !== "" && !isNaN(an) && isFinite(an) && bv.trim() !== "" && !isNaN(bn) && isFinite(bn)) {
-      return (an - bn) * dir;
-    }
-    return av.localeCompare(bv, undefined, { numeric: true }) * dir;
-  });
+  state.rows.sort((a, b) => cmpTyped(a[col] ?? "", b[col] ?? "") * dir);
 }
 function toggleSort(col) {
   if (state.sortCol !== col) { state.sortCol = col; state.sortDir = 1; }
@@ -316,6 +340,39 @@ const esc = s => {
 };
 const escAttr = s => (s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Smart column-type detection: classify every non-empty value in the column and
+// report the dominant type (≥ 60% of non-empty cells). Powers the header badge
+// and gives a stable "what is this column?" across display, sort and stats.
+const TYPE_BADGE = {
+  number:   { label: "#",    cls: "t-num",   title: "Number" },
+  percent:  { label: "%",    cls: "t-pct",   title: "Percent" },
+  currency: { label: "$",    cls: "t-cur",   title: "Currency" },
+  date:     { label: "📅",   cls: "t-date",  title: "Date" },
+  datetime: { label: "📅",   cls: "t-date",  title: "Date & time" },
+  time:     { label: "⏱",    cls: "t-time",  title: "Time" },
+  boolean:  { label: "✓",    cls: "t-bool",  title: "Boolean" },
+  text:     { label: "Aa",   cls: "t-text",  title: "Text" },
+};
+function columnType(c) {
+  const counts = {};
+  let nonEmpty = 0;
+  for (const row of state.rows) {
+    const v = row[c];
+    if (v === undefined || String(v).trim() === "") continue;
+    nonEmpty++;
+    const t = typeInfo(v).type;
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  if (nonEmpty === 0) return { type: "empty", label: "", cls: "", title: "Empty" };
+  let best = "text", bestN = 0;
+  for (const t of Object.keys(counts)) {
+    if (counts[t] > bestN) { bestN = counts[t]; best = t; }
+  }
+  if (bestN / nonEmpty < 0.6) best = "mixed";
+  if (best === "mixed") return { type: "mixed", label: "±", cls: "t-mix", title: "Mixed types" };
+  const b = TYPE_BADGE[best] || TYPE_BADGE.text;
+  return { type: best, label: b.label, cls: b.cls, title: b.title };
+}
 function renderHeader() {
   // Fixed column widths: table sizes itself to colnum(46)+addcol(34)+N*120,
   // so wide files stay readable and scroll instead of squishing to the viewport.
@@ -325,18 +382,24 @@ function renderHeader() {
   for (let c = 0; c < state.headers.length; c++) {
     const isSorted = state.sortCol === c;
     const isFiltered = Object.prototype.hasOwnProperty.call(state.filters, c);
+    const type = columnType(c);
     const cls = [
       isSorted ? (state.sortDir === 1 ? "sorted-asc" : "sorted-desc") : "",
       isFiltered ? "has-filter" : "",
+      type.cls ? "has-type" : "",
     ].join(" ");
     const funnel = isFiltered
       ? "" : "opacity:.45;";
+    const badge = type.label
+      ? `<span class="col-type-badge ${type.cls}" title="Detected type: ${esc(type.title)}">${type.label}</span>`
+      : "";
     html += `<th class="${cls}" data-col="${c}"><div class="th-inner">
       <button type="button" class="th-filter ${isFiltered ? "on" : ""}" style="${funnel}" data-action="filter-col" data-col="${c}" title="Filter ${esc(state.headers[c])}" aria-label="Filter ${esc(state.headers[c])}">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
       </button>
       <div class="col-resize" data-col="${c}" title="Drag to resize · double-click to auto-fit" aria-hidden="true"></div>
       <span class="th-label">${esc(state.headers[c] || "Column " + (c + 1))}
+        ${badge}
         <svg class="sort-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path data-dir="asc" d="M18 15l-6-6-6 6"/><path data-dir="desc" d="M6 9l6 6 6-6"/>
         </svg>
@@ -363,38 +426,230 @@ function renderHeader() {
   head.innerHTML = html;
 }
 
-/* ---------- Virtualisation ----------
-   Only the rows in the viewport (+ overscan) are in the DOM; a `#padTop`
-   spacer provides the scrollback. Row height is fixed at 30px, so the window
-   can be computed from scrollTop alone. DOM stays ~40-60 rows regardless of
-   file size, which is what keeps a 50k-row grid responsive. */
-const ROW_H = 30;
-const OVERSCAN = 10;
+/* ============ Cell formatting (bold/italic/underline/align/wrap/clear) ============
+   Per-cell overrides live in state.formats: { "r,c": {bold?,italic?,underline?,align?,wrap?} }.
+   The keys are only created when a prop is actually set, so undo snapshots stay
+   compact. `clearFormatting()` wipes the selection's props (keep the row/col intact).
+   The toolbar's B/I/U buttons read `sel` and apply to the whole selection. */
+function fmtKey(r, c) { return r + "," + c; }
+function getCellFormat(r, c) { return (state.formats && state.formats[fmtKey(r, c)]) || null; }
 
-function windowBounds(total) {
-  const st = scroller.scrollTop;
-  const vh = scroller.clientHeight || 800;
-  let s = Math.floor(st / ROW_H) - OVERSCAN;
-  let e = Math.ceil((st + vh) / ROW_H) + OVERSCAN;
-  return { s: Math.max(0, s), e: Math.min(total, e) };
+// Apply (or clear, if props value is null) a set of formatting props to every
+// cell in `sel`. `silent` skips history/dirty/render (used by tests).
+function applyFormatToSelection(props, silent) {
+  if (!sel) return false;
+  let dirty = false;
+  const r1 = sel.r1, r2 = sel.r2, c1 = sel.c1, c2 = sel.c2;
+  for (let r = r1; r <= r2; r++) {
+    for (let c = c1; c <= c2; c++) {
+      const k = fmtKey(r, c);
+      const cur = (state.formats && state.formats[k]) || {};
+      const next = { ...cur };
+      for (const p in props) {
+        const v = props[p];
+        if (v === null || v === undefined) delete next[p];
+        else next[p] = v;
+        dirty = true;
+      }
+      state.formats[k] = next;
+    }
+  }
+  if (!dirty) return false;
+  // Drop empty keys in-place (cheap: only rows we touched)
+  for (let r = r1; r <= r2; r++) {
+    for (let c = c1; c <= c2; c++) {
+      const k = fmtKey(r, c);
+      if (state.formats[k] && Object.keys(state.formats[k]).length === 0) delete state.formats[k];
+    }
+  }
+  if (!silent) {
+    markDirty();
+    pushHistory();
+    render();
+    updateSelection();
+  }
+  return true;
+}
+function clearFormatting(silent) {
+  if (!sel) return false;
+  let changed = false;
+  for (let r = sel.r1; r <= sel.r2; r++) {
+    for (let c = sel.c1; c <= sel.c2; c++) {
+      const k = fmtKey(r, c);
+      if (state.formats[k]) { delete state.formats[k]; changed = true; }
+    }
+  }
+  if (!changed) return false;
+  if (!silent) { markDirty(); pushHistory(); render(); updateSelection(); }
+  return true;
+}
+// Read the "effective" format for a cell: type-based default + user override.
+function effectiveFormat(r, c, type) {
+  const f = getCellFormat(r, c);
+  const defaultAlign = (type === "number" || type === "percent" || type === "currency" ||
+                        type === "date" || type === "datetime" || type === "time") ? "right" : "left";
+  return {
+    bold:      !!(f && f.bold),
+    italic:    !!(f && f.italic),
+    underline: !!(f && f.underline),
+    align:     (f && f.align) || defaultAlign,
+    wrap:      !!(f && f.wrap),
+  };
 }
 
+/* ---- Formatting toolbar sync + actions ---- */
+const FORMATTERS = {
+  bold:      (on) => ({ bold: on ? true : null }),
+  italic:    (on) => ({ italic: on ? true : null }),
+  underline: (on) => ({ underline: on ? true : null }),
+  wrap:      (on) => ({ wrap: on ? true : null }),
+};
+function selCells() {
+  if (!sel) return [];
+  const out = [];
+  for (let r = sel.r1; r <= sel.r2; r++) for (let c = sel.c1; c <= sel.c2; c++) out.push([r, c]);
+  return out;
+}
+// True if every cell in the selection carries the given formatting prop (bold/italic/underline/wrap).
+function allHave(prop) {
+  const cs = selCells();
+  if (!cs.length) return false;
+  return cs.every(([r, c]) => effectiveFormat(r, c, typeInfo((state.rows[r] || [])[c] ?? "").type)[prop]);
+}
+function alignOfSel() {
+  const cs = selCells();
+  if (!cs.length || cs.length === 0) return null;
+  // "uniform" only if every cell's effective align is the same
+  let seen = null;
+  for (const [r, c] of cs) {
+    const a = effectiveFormat(r, c, typeInfo(state.rows[r][c] ?? "").type).align;
+    if (seen === null) seen = a;
+    else if (seen !== a) return null;
+  }
+  return seen;
+}
+// Sync the B/I/U / align / wrap buttons' "on" state to the current selection.
+function updateFmtToolbar() {
+  const set = (id, on) => {
+    const el = $("" + id);
+    if (!el) return;
+    el.classList.toggle("on", !!on);
+    el.setAttribute("aria-pressed", on ? "true" : "false");
+  };
+  const has = sel && cs_len();
+  if (!has) {
+    ["fmtBold","fmtItalic","fmtUnder","fmtAlignL","fmtAlignC","fmtAlignR","fmtWrap"].forEach(id => set(id, false));
+    return;
+  }
+  set("fmtBold", allHave("bold"));
+  set("fmtItalic", allHave("italic"));
+  set("fmtUnder", allHave("underline"));
+  set("fmtWrap", allHave("wrap"));
+  const a = alignOfSel();
+  set("fmtAlignL", a === "left");
+  set("fmtAlignC", a === "center");
+  set("fmtAlignR", a === "right");
+}
+function cs_len() { return sel ? (sel.r2 - sel.r1 + 1) * (sel.c2 - sel.c1 + 1) : 0; }
+
+function applyFmt(btnId, prop) {
+  if (!sel) { showToast("Select cells first", "error"); return; }
+  if (prop === "align-left" || prop === "align-center" || prop === "align-right") {
+    const want = prop.slice("align-".length);        // "left" | "center" | "right"
+    const now = alignOfSel();
+    // Clicking the currently-active align resets to the column's type default.
+    applyFormatToSelection(now === want ? { align: null } : { align: want });
+    updateFmtToolbar();
+    return;
+  }
+  const on = !allHave(prop);                          // bold / italic / underline / wrap
+  applyFormatToSelection(FORMATTERS[prop](on));
+  updateFmtToolbar();
+}
+
+const FORMATTING_BTN = {
+  fmtBold: "bold", fmtItalic: "italic", fmtUnder: "underline",
+  fmtAlignL: "align-left", fmtAlignC: "align-center", fmtAlignR: "align-right",
+  fmtWrap: "wrap",
+};
+for (const id in FORMATTING_BTN) {
+  const el = $(id); if (!el) continue;
+  el.addEventListener("click", (e) => {
+    e.preventDefault();
+    const prop = FORMATTING_BTN[id];
+    applyFmt(id, prop);
+  });
+}
+const fmtClear = $("fmtClear");
+if (fmtClear) fmtClear.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!sel) { showToast("Select cells first", "error"); return; }
+  clearFormatting();
+  updateFmtToolbar();
+  showToast("Formatting cleared");
+});
+
+/* ---------- Virtualisation ----------
+   Only the rows in the viewport (+ overscan) are in the DOM; a `#padTop`
+   spacer provides the scrollback. `ROW_H` is the base height of a single-line
+   cell; word-wrapped cells make their row taller. `windowState` carries a
+   prefix sum of the VISIBLE rows' heights so `windowBounds` can binary-search
+   the visible range in O(log n) — 50k rows stay responsive even with many
+   wrapped cells, and it stays correct under search/filter. Invalidate
+   `windowState=null` on any data/format/column/width change (renderBody rebuilds). */
+const ROW_H = 30;
+const OVERSCAN = 10;
+const CELL_LINE_H = 18.4;   // 13px font * 1.45 line-height
+const CELL_PAD_Y  = 10;     // 5px top + 5px bottom
+// Height of one absolute row = max of its cells' heights (>= ROW_H). Wrapped
+// cells estimate their line count from char length / column width.
+function visibleRowHeight(ri) {
+  const row = state.rows[ri];
+  if (!row) return ROW_H;
+  let maxH = ROW_H;
+  for (let c = 0; c < state.headers.length; c++) {
+    const v = row[c];
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (s === "") continue;
+    const f = (state.formats && state.formats[ri + "," + c]) || {};
+    let h = CELL_PAD_Y + CELL_LINE_H;
+    if (f.wrap) {
+      const colW = colWidths[c] || 120;
+      const cpl = Math.max(4, Math.floor(colW / 8.2));
+      const lines = Math.max(1, Math.ceil(s.length / cpl));
+      h = CELL_PAD_Y + lines * CELL_LINE_H;
+    }
+    if (h > maxH) maxH = h;
+  }
+  return maxH;
+}
+const lowerBound = (arr, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < x) lo = m + 1; else hi = m; } return lo; };
+const upperBound = (arr, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= x) lo = m + 1; else hi = m; } return lo; };
+
+function windowBounds() {
+  const vis = windowState.vis, prefix = windowState.prefix, n = vis.length;
+  if (n === 0) return { s: 0, e: 0 };
+  const st = scroller.scrollTop, vh = scroller.clientHeight || 800;
+  let s = Math.max(0, upperBound(prefix, st) - 1);
+  let e = Math.min(n - 1, lowerBound(prefix, st + vh));
+  s = Math.max(0, s - OVERSCAN);
+  e = Math.min(n - 1, e + OVERSCAN);
+  return { s, e };
+}
 function paintBody() {
-  const vis = windowState.vis;
-  const total = vis.length;
-  const searching = state.searchQuery !== "";
-  const { s, e } = windowBounds(total);
+  const vis = windowState.vis, n = vis.length, searching = state.searchQuery !== "";
+  const { s, e } = windowBounds();
   let html = `<tr id="padTop" class="pad" aria-hidden="true"><td style="width:100%;"></td></tr>`;
-  if (searching && total === 0) {
+  if (searching && n === 0) {
     html += `<tr class="no-match"><td colspan="${state.headers.length + 2}">No rows match &ldquo;${esc(state.searchQuery)}&rdquo;</td></tr>`;
   }
-  for (let p = s; p < e; p++) {
+  for (let p = s; p <= e; p++) {
     const i = vis[p];
     const parts = [];
     if (i % 2 === 1) parts.push("zebra");
     if (searching) parts.push("is-match");
-    const active = act && act.r === i;
-    if (active) parts.push("active-row");
+    if (act && act.r === i) parts.push("active-row");
     html += rowHtml(i, parts.join(" "));
   }
   html += `<tr class="row-add">
@@ -403,8 +658,24 @@ function paintBody() {
     <td class="rowdel"></td>
   </tr>`;
   body.innerHTML = html;
-  const pad = body.querySelector("#padTop");
-  if (pad) pad.style.height = (s * ROW_H) + "px";
+  body.querySelector("#padTop").style.height = windowState.prefix[s] + "px";
+}
+// Absolute row index under a point in the grid's content coordinate space.
+function rowFromY(contentY) {
+  if (!windowState || windowState.vis.length === 0) return 0;
+  const k = Math.max(0, Math.min(windowState.vis.length - 1, upperBound(windowState.prefix, contentY) - 1));
+  return windowState.vis[k];
+}
+function renderBody() {
+  const vis = visibleRows();
+  const prefix = [0];
+  for (const i of vis) prefix.push(prefix[prefix.length - 1] + visibleRowHeight(i));
+  windowState = { vis, prefix, totalH: prefix[prefix.length - 1] };
+  paintBody();
+  if (state.editingRow >= 0) {
+    const input = body.querySelector('.cell-input[data-ri="' + state.editingRow + '"][data-c="' + state.editingCol + '"]');
+    if (input) { input.focus(); input.select(); }
+  }
 }
 
 function rowHtml(i, cls) {
@@ -415,30 +686,30 @@ function rowHtml(i, cls) {
     const val = row[c] !== undefined ? row[c] : "";
     const cellSel = sel && i >= sel.r1 && i <= sel.r2 && c >= sel.c1 && c <= sel.c2;
     if (state.editingRow === i && state.editingCol === c) {
-      h += `<td class="cell editing${cellSel ? " sel-cell" : ""}" data-ri="${i}" data-c="${c}"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
+      const ti = typeInfo(val);
+      const ef = effectiveFormat(i, c, ti.type);
+      const fcls = [
+        ef.bold ? "f-bold" : "", ef.italic ? "f-italic" : "", ef.underline ? "f-underline" : "",
+        "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
+      ].filter(Boolean).join(" ");
+      h += `<td class="cell editing${cellSel ? " sel-cell" : ""} ${fcls.trim()}" data-ri="${i}" data-c="${c}"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
     } else {
-      const num = cellNumericInfo(val);
+      const ti = typeInfo(val);
+      const ef = effectiveFormat(i, c, ti.type);
       let cls = cellSel ? " sel-cell" : "";
-      let txtCls = "cell-display";
-      if (num.kind === "empty") txtCls += " is-empty";
-      else if (num.kind === "num") { txtCls += " is-num"; if (num.negative) cls += " is-neg"; }
-      else if (num.kind === "date") txtCls += " is-date";
-      h += `<td class="cell${cls}" data-ri="${i}" data-c="${c}"><span class="${txtCls}">${val === "" ? "&nbsp;" : esc(val)}</span></td>`;
+      if (ti.negative) cls += " is-neg";
+      const fcls = [
+        ef.bold ? "f-bold" : "", ef.italic ? "f-italic" : "", ef.underline ? "f-underline" : "",
+        "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
+      ].filter(Boolean).join(" ");
+      const spanCls = (val === "" || val === undefined) ? "cell-display is-empty" : "cell-display";
+      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${ti.type}"><span class="${spanCls}">${val === "" || val === undefined ? "&nbsp;" : esc(val)}</span></td>`;
     }
   }
   h += `<td class="rowdel"><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
   </button></td></tr>`;
   return h;
-}
-
-function renderBody() {
-  windowState = { vis: visibleRows() };
-  paintBody();
-  if (state.editingRow >= 0) {
-    const input = body.querySelector('.cell-input[data-ri="' + state.editingRow + '"][data-c="' + state.editingCol + '"]');
-    if (input) { input.focus(); input.select(); }
-  }
 }
 
 let scrollRAF = 0;
@@ -612,7 +883,7 @@ document.addEventListener("mousemove", (e) => {
   if (e.buttons !== 1) return;
   const sc = scroller.getBoundingClientRect();
   if (e.clientY < sc.top || e.clientY > sc.bottom) return;
-  const rowIdx = Math.floor((e.clientY - sc.top + scroller.scrollTop - 34) / ROW_H);
+  const rowIdx = rowFromY(e.clientY - sc.top + scroller.scrollTop - 34);
   const r = Math.max(0, Math.min(state.rows.length - 1, rowIdx));
   const col = colFromX(e.clientX);
   if (r !== dragStart.r || col !== dragStart.c) dragMoved = true;
@@ -717,6 +988,12 @@ document.addEventListener("keydown", (e) => {
   if (mod && !e.shiftKey && k === "d") { e.preventDefault(); fillDown(); return; }
   if (mod && e.shiftKey && k === "r") { e.preventDefault(); fillRight(); return; }
   if (mod && k === "a") { e.preventDefault(); selectWholeGrid(); return; }
+  // Formatting shortcuts (outside the cell editor, where B/I/U are native)
+  if (mod && !e.altKey && !e.shiftKey && !isCellInput(document.activeElement)) {
+    if (k === "b") { e.preventDefault(); applyFmt("fmtBold", "bold"); return; }
+    if (k === "i") { e.preventDefault(); applyFmt("fmtItalic", "italic"); return; }
+    if (k === "u") { e.preventDefault(); applyFmt("fmtUnder", "underline"); return; }
+  }
   if (e.key === "Escape") {
     if (isCellInput(document.activeElement)) { state.editingRow = -1; state.editingCol = -1; render(); }
     else if (sel) { e.preventDefault(); clearSel(); }
@@ -840,10 +1117,12 @@ function resetState(keepFilename) {
   state.searchQuery = "";
   state.filters = {};
   state.selectedCol = -1;
+  state.formats = {};
   searchInput.value = "";
   searchClear.hidden = true;
   state.history = [];
   state.historyIndex = -1;
+  state.formats = {};
   if (!keepFilename) filenameInput.value = "untitled";
   applyStoredWidths();
   // every resetState() call is a fresh load -> grid matches source, not dirty
@@ -1469,7 +1748,12 @@ function nudgeActive(dr, dc, extend) {
 }
 function scrollCellIntoView(r, c) {
   const sc = scroller.getBoundingClientRect();
-  const top = r * ROW_H, bottom = (r + 1) * ROW_H;
+  const prefix = (windowState && windowState.prefix) || null;
+  let top = 0, bottom = ROW_H;
+  if (prefix) {
+    const pos = Math.max(0, Math.min(prefix.length - 2, r));
+    top = prefix[pos]; bottom = prefix[pos + 1];
+  }
   if (top < scroller.scrollTop) scroller.scrollTop = top;
   else if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
   const left = 46 + Array.from({ length: c }, (_, i) => colWidths[i] || DEFAULT_COL_W).reduce((a, b) => a + b, 0);
@@ -1477,60 +1761,202 @@ function scrollCellIntoView(r, c) {
   if (left < 46 + scroller.scrollLeft) scroller.scrollLeft = Math.max(0, left - 46);
   else if (right > scroller.scrollLeft + scroller.clientWidth - 34) scroller.scrollLeft = right - scroller.clientWidth + 34;
 }
+/* ============ Type inference — single source of truth ============
+   A cell value is classified exactly once and the result drives display
+   alignment, stats (sum / avg / min / max vs. date / time / boolean),
+   sorting, and per-column type detection. This replaces the old ad-hoc
+   "is this a number?" checks so dates, times, booleans, percents and
+   currency are handled consistently everywhere (and dates are never
+   silently folded into numeric sums). */
+const MONTH_NUM = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+const TWO_DIGIT_Y = (y) => (y < 100 ? (y < 70 ? 2000 + y : 1900 + y) : y);
+const validDate = (y, mo, dd) =>
+  Number.isInteger(y) && mo >= 1 && mo <= 12 && dd >= 1 && dd <= 31 &&
+  new Date(Date.UTC(y, mo - 1, dd)).getUTCDate() === dd &&
+  new Date(Date.UTC(y, mo - 1, dd)).getUTCMonth() === mo - 1;
+const mkDate = (dd, mo, y) => (validDate(y, mo, dd) ? { y, mo, dd } : null);
+
+// Standalone time-of-day → {hh,mm,ss} | null.
+function parseTimeStr(s) {
+  const low = s.toLowerCase();
+  let m = low.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/);
+  if (m) {
+    let hh = +m[1], mm = +m[2], ss = m[3] ? +m[3] : 0;
+    if (m[4] === "pm" && hh < 12) hh += 12;
+    if (m[4] === "am" && hh === 12) hh = 0;
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    return { hh, mm, ss };
+  }
+  m = low.match(/^(\d{1,2})\s*(am|pm)$/);
+  if (m) {
+    let hh = +m[1];
+    if (m[2] === "pm" && hh < 12) hh += 12;
+    if (m[2] === "am" && hh === 12) hh = 0;
+    if (hh > 23) return null;
+    return { hh, mm: 0, ss: 0 };
+  }
+  return null;
+}
+
+// Calendar date (no time) → {y,mo,dd} | null for the formats below.
+function parseDateStr(s) {
+  const low = s.toLowerCase();
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (m) return mkDate(+m[3], +m[2], +m[1]);
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  if (m) {
+    const a = +m[1], bb = +m[2], y = TWO_DIGIT_Y(+m[3]);
+    let mo, dd;
+    if (a > 12) { mo = bb; dd = a; }
+    else if (bb > 12) { dd = bb; mo = a; }
+    else { mo = a; dd = bb; }                 // ambiguous → month-first (US)
+    return mkDate(dd, mo, y);
+  }
+  m = low.match(/^([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{2,4})$/);
+  if (m && MONTH_NUM[m[1].slice(0, 3)]) return mkDate(+m[2], MONTH_NUM[m[1].slice(0, 3)], TWO_DIGIT_Y(+m[3]));
+  m = low.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?,?\s+(\d{2,4})$/);
+  if (m && MONTH_NUM[m[2].slice(0, 3)]) return mkDate(+m[1], MONTH_NUM[m[2].slice(0, 3)], TWO_DIGIT_Y(+m[3]));
+  return null;
+}
+
+// A plain/decimal/percent/currency number → finite number | null.
+function toNumberCore(s) {
+  if (s === undefined || s === null) return null;
+  let t = String(s).trim();
+  if (t === "") return null;
+  if (/[a-z]/i.test(t)) {
+    if (/[£$€¥₹]/.test(t)) t = t.replace(/[£$€¥₹]/g, "");
+    else return null;
+  }
+  t = t.replace(/[$,]/g, "").trim();
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+// CLASSIFY one cell value. `value` is always a finite number when comparable
+// (numeric value; date/datetime = UTC ms; time = seconds-of-day; bool = 0/1).
+function typeInfo(v) {
+  if (v === undefined || v === null) return { type: "empty", value: NaN, negative: false, align: "left" };
+  const s = String(v).trim();
+  if (s === "") return { type: "empty", value: NaN, negative: false, align: "left" };
+  const low = s.toLowerCase();
+
+  // Boolean
+  if (low === "true" || low === "false" || low === "yes" || low === "no") {
+    const b = low === "true" || low === "yes";
+    return { type: "boolean", value: b ? 1 : 0, negative: false, align: "left", bool: b };
+  }
+
+  // Datetime (date prefix + trailing time): "2021-03-15 14:30", "03/15/2021 9:30 AM", "2021-03-15T14:30:05"
+  const dtMatch = s.match(/^(.*?)[\sT]+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:am|pm))?)$/i);
+  if (dtMatch) {
+    const d = parseDateStr(dtMatch[1].trim());
+    const t = parseTimeStr(dtMatch[2]);
+    if (d && t) {
+      const value = Date.UTC(d.y, d.mo - 1, d.dd, t.hh, t.mm, t.ss, 0);
+      return { type: "datetime", value, negative: false, align: "right", d, t };
+    }
+  }
+
+  // Date
+  const d = parseDateStr(s);
+  if (d) {
+    const value = Date.UTC(d.y, d.mo - 1, d.dd, 12, 0, 0, 0); // noon → stable across TZ
+    return { type: "date", value, negative: false, align: "right", d };
+  }
+
+  // Time
+  const t = parseTimeStr(s);
+  if (t) return { type: "time", value: t.hh * 3600 + t.mm * 60 + t.ss, negative: false, align: "right", t };
+
+  // Parenthesized negative: (1,234) / ($500) / (12%)
+  if (/^\(.*\)$/.test(s)) {
+    const inner = s.slice(1, -1);
+    const n = /%$/.test(inner) ? toNumberCore(inner.replace(/%$/).trim()) : toNumberCore(inner);
+    if (n !== null) {
+      const value = -Math.abs(n);
+      return { type: n < 0 ? "number" : "number", value, negative: true, align: "right" };
+    }
+  }
+
+  // Percent: 25% / 12.5% / 1,000%
+  if (/%$/.test(s)) {
+    const n = toNumberCore(s.replace(/%$/, "").trim());
+    if (n !== null) return { type: "percent", value: n, negative: n < 0, align: "right" };
+  }
+
+  // Currency / plain number: $1,234.56 / 1,234 / -0.5 / .75
+  const n = toNumberCore(s);
+  if (n !== null) {
+    const cur = /[£$€¥₹]/.test(s);
+    return { type: cur ? "currency" : "number", value: n, negative: n < 0, align: "right" };
+  }
+
+  return { type: "text", value: NaN, negative: false, align: "left" };
+}
+
+// Legacy shape (used by earlier tests / the console API) — a thin view over typeInfo.
+function cellNumericInfo(v) {
+  const ti = typeInfo(v);
+  if (ti.type === "empty") return { kind: "empty", value: NaN, negative: false };
+  // Numbers, percents, currency, dates, datetimes, times → right-aligned "num".
+  // Booleans and free text → left "text". (`num` was historically used for the
+  // right-aligned group; `date` is preserved when a value is a pure date.)
+  const kind = (ti.type === "date" || ti.type === "datetime") ? "date"
+             : ti.align === "right" ? "num" : "text";
+  return { kind, value: ti.value, negative: !!ti.negative };
+}
+
 function computeStats(r1, c1, r2, c2) {
-  let count = 0, sum = 0, min = Infinity, max = -Infinity, numCount = 0, empty = 0, nonNum = 0, dateCount = 0;
-  const parseNum = (s) => {
-    // (1,234) → -1234;  1,234.56 → 1234.56;  25% → 25;  $12.5 → 12.5
-    let t = s.trim();
-    let neg = false;
-    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
-    if (t.endsWith("%")) { t = t.slice(0, -1); }
-    t = t.replace(/[^0-9.-]/g, "");
-    if (t === "" || t === "-" || t === ".") return NaN;
-    const n = Number(t);
-    if (!isFinite(n)) return NaN;
-    return neg ? -n : n;
-  };
-  const dateRe = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$/;
+  let count = 0, empty = 0, textCount = 0;
+  const num = { count: 0, sum: 0, min: Infinity, max: -Infinity };
+  const dates = { count: 0, minMs: Infinity, maxMs: -Infinity, minS: null, maxS: null };
+  const times = { count: 0, minS: null, maxS: null, minSecs: Infinity, maxSecs: -Infinity };
+  const bools = { count: 0, trueCount: 0 };
   for (let r = r1; r <= r2; r++) {
     const row = state.rows[r]; if (!row) continue;
     for (let c = c1; c <= c2; c++) {
-      const v = row[c]; const s = v === undefined ? "" : String(v).trim();
+      const v = row[c];
+      const s = v === undefined ? "" : String(v).trim();
       count++;
       if (s === "") { empty++; continue; }
-      if (dateRe.test(s)) { dateCount++; continue; }
-      const n = parseNum(s);
-      if (isFinite(n)) { numCount++; sum += n; if (n < min) min = n; if (n > max) max = n; }
-      else nonNum++;
+      const ti = typeInfo(v);
+      if (ti.type === "number" || ti.type === "percent" || ti.type === "currency") {
+        num.count++; num.sum += ti.value;
+        if (ti.value < num.min) num.min = ti.value;
+        if (ti.value > num.max) num.max = ti.value;
+      } else if (ti.type === "date" || ti.type === "datetime") {
+        dates.count++;
+        if (ti.value < dates.minMs) { dates.minMs = ti.value; dates.minS = s; }
+        if (ti.value > dates.maxMs) { dates.maxMs = ti.value; dates.maxS = s; }
+      } else if (ti.type === "time") {
+        times.count++;
+        if (ti.value < times.minSecs) { times.minSecs = ti.value; times.minS = s; }
+        if (ti.value > times.maxSecs) { times.maxSecs = ti.value; times.maxS = s; }
+      } else if (ti.type === "boolean") {
+        bools.count++; if (ti.bool) bools.trueCount++;
+      } else {
+        textCount++;
+      }
     }
   }
-  const has = numCount > 0;
-  return { count, numCount, empty, nonNum, dateCount, sum, avg: has ? sum / numCount : 0, min: has ? min : null, max: has ? max : null };
+  return {
+    count, empty, textCount, nonNum: textCount,
+    numCount: num.count,
+    hasNum: num.count > 0,
+    sum: num.sum, avg: num.count ? num.sum / num.count : null,
+    min: num.count ? num.min : null, max: num.count ? num.max : null,
+    dateCount: dates.count, dateMin: dates.count ? dates.minS : null, dateMax: dates.count ? dates.maxS : null,
+    timeCount: times.count, timeMin: times.count ? times.minS : null, timeMax: times.count ? times.maxS : null,
+    boolCount: bools.count, boolTrue: bools.trueCount,
+  };
 }
+// Format a number for the stats bar (plain integers stay integer; else up to 4 dp).
 function fmtStat(x) {
   if (x === null || x === undefined || !isFinite(x)) return "—";
   if (Number.isInteger(x)) return x.toLocaleString();
   return x.toLocaleString(undefined, { maximumFractionDigits: 4 });
-}
-// Classify a cell's value for Google-Sheets-style conditional formatting:
-// numbers right-align & tabular, negatives highlight, dates left-align.
-function cellNumericInfo(v) {
-  if (v === undefined || v === null) return { kind: "text" };
-  const s = String(v).trim();
-  if (s === "") return { kind: "empty" };
-  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$/.test(s)) return { kind: "date" };
-  // Strings containing letters (e.g. "abc123", "SKU-1") are text, not numbers —
-  // Google Sheets left-aligns them. Only pure numeric content is eligible below.
-  if (/[a-z]/i.test(s)) return { kind: "text" };
-  let neg = false;
-  let t = s;
-  if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }   // (1,234) → -1234
-  if (t.endsWith("%")) t = t.slice(0, -1);
-  t = t.replace(/[^0-9.-]/g, "");
-  if (t === "" || t === "-" || t === ".") return { kind: "text" };
-  const n = Number(t);
-  if (!isFinite(n)) return { kind: "text" };
-  return { kind: "num", value: neg ? -n : n, negative: neg || n < 0 };
 }
 function inSelection(r, c) { return sel && r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2; }
 function computeStatsFull() { return sel ? computeStats(sel.r1, sel.c1, sel.r2, sel.c2) : null; }
@@ -1561,6 +1987,7 @@ function updateSelection() {
     refreshHeaderSel();
   }
   updateSelStats();
+  if (typeof updateFmtToolbar === "function") updateFmtToolbar();
 }
 function updateSelStats() {
   const el = $("selStats"); if (!el) return;
@@ -1568,25 +1995,42 @@ function updateSelStats() {
   const st = computeStats(sel.r1, sel.c1, sel.r2, sel.c2);
   el.hidden = false;
   const multi = isMulti();
+  const copyable = (label, val, title) =>
+    `<span class="sel-item" data-copy="${String(val).replace(/"/g, "&quot;")}" title="${title || label} (click to copy)">${label} ${val}</span>`;
   let html = `<span class="sel-n">${st.count} cell${st.count === 1 ? "" : "s"}</span>`;
-  if (st.numCount > 0) {
-    html +=
-      `<span class="sel-item" data-fn="sum" title="Sum (click to copy)">Σ ${fmtStat(st.sum)}</span>` +
-      `<span class="sel-item" data-fn="avg" title="Average (click to copy)">x̄ ${fmtStat(st.avg)}</span>` +
-      `<span class="sel-item" data-fn="min" title="Minimum (click to copy)">min ${fmtStat(st.min)}</span>` +
-      `<span class="sel-item" data-fn="max" title="Maximum (click to copy)">max ${fmtStat(st.max)}</span>`;
+  // Numeric: sum / average / min / max
+  if (st.hasNum) {
+    html += copyable("Σ", fmtStat(st.sum), "Sum")
+          + copyable("x̄", fmtStat(st.avg), "Average")
+          + copyable("min", fmtStat(st.min), "Minimum")
+          + copyable("max", fmtStat(st.max), "Maximum");
   }
-  html += `<span class="sel-item" data-fn="count" title="Count (click to copy)">n ${st.count}</span>`;
-  if (st.numCount > 0) html += `<button class="sel-sigma" id="selSigma" type="button" title="Compute / copy a statistic">Σ more</button>`;
+  // Dates: earliest / latest (keep the original cell text, not a recomputed date)
+  if (st.dateCount) {
+    html += copyable("📅", st.dateMin, "Earlier")
+          + copyable("📅", st.dateMax, "Later");
+  }
+  // Times: earliest / latest
+  if (st.timeCount) {
+    html += copyable("⏱", st.timeMin, "Earliest")
+          + copyable("⏱", st.timeMax, "Latest");
+  }
+  // Booleans: how many TRUE
+  if (st.boolCount) {
+    html += `<span class="sel-item" title="True / total">✓ ${st.boolTrue}/${st.boolCount}</span>`;
+  }
+  // Breakdown + non-numerics
+  if (st.textCount > 0) html += `<span class="sel-item text" title="non-numeric cells" data-copy="${st.textCount}">A→Z ${st.textCount}</span>`;
+  if (st.empty > 0) html += `<span class="sel-item text" title="empty cells" data-copy="${st.empty}">∅ ${st.empty}</span>`;
+  html += `<span class="sel-item" data-copy="${st.count}" title="Count of all cells" >n ${st.count}</span>`;
+  if (st.hasNum) html += `<button class="sel-sigma" id="selSigma" type="button" title="Compute / copy a statistic">Σ more</button>`;
   if (multi) html += `<button class="sel-act" id="selClear" type="button" title="Clear all selected cells">Clear cells</button>`;
   if (isFullRowSpan()) html += `<button class="sel-act danger" id="selDelRows" type="button" title="Delete all selected rows">Delete ${sel.r2 - sel.r1 + 1} rows</button>`;
   el.innerHTML = html;
-  // wire chips
-  el.querySelectorAll(".sel-item").forEach(ch => ch.addEventListener("click", () => {
-    const v = computeStats(sel.r1, sel.c1, sel.r2, sel.c2);
-    const map = { sum: v.sum, avg: v.avg, min: v.min, max: v.max, count: v.count };
-    writeClipboard(String(map[ch.dataset.fn]))
-      .then(() => showToast(`${ch.dataset.fn.toUpperCase()} = ${fmtStat(map[ch.dataset.fn])} copied`))
+  // wire copy chips (click to copy the value)
+  el.querySelectorAll(".sel-item[data-copy]").forEach(ch => ch.addEventListener("click", () => {
+    writeClipboard(ch.dataset.copy)
+      .then(() => showToast((ch.dataset.copy) + " copied"))
       .catch(() => showToast("Copy blocked", "error"));
   }));
   const sum = el.querySelector("#selSigma");
@@ -1818,6 +2262,14 @@ const Ctx = (() => {
     caseLower:{ label: "Lowercase", run: () => applyCase("lower") },
     caseUpper:{ label: "UPPERCASE", run: () => applyCase("upper") },
     caseTitle:{ label: "Title Case", run: () => applyCase("title") },
+    fmtBold:  { label: "Bold",       kbd: "⌘B", run: () => applyFmt("fmtBold", "bold") },
+    fmtItalic:{ label: "Italic",     kbd: "⌘I", run: () => applyFmt("fmtItalic", "italic") },
+    fmtUnder: { label: "Underline",  kbd: "⌘U", run: () => applyFmt("fmtUnder", "underline") },
+    fmtAL:    { label: "Align left", run: () => applyFmt("fmtAlignL", "align-left") },
+    fmtAC:    { label: "Align center", run: () => applyFmt("fmtAlignC", "align-center") },
+    fmtAR:    { label: "Align right", run: () => applyFmt("fmtAlignR", "align-right") },
+    fmtWrap:  { label: "Word wrap (on/off)", run: () => applyFmt("fmtWrap", "wrap") },
+    fmtClear: { label: "Clear formatting", run: () => { clearFormatting(); updateSelection(); } },
     sortAsc:  { label: "Sort A → Z", run: () => sortSelColumn(1) },
     sortDesc: { label: "Sort Z → A", run: () => sortSelColumn(-1) },
     autofit:  { label: "Auto-fit column",   run: () => autofitColumn(ctxCol()) },
@@ -1844,11 +2296,14 @@ const Ctx = (() => {
     if (kinds.includes("cell")) {
       addBtn("copy"); addBtn("paste"); addBtn("clear"); addSep();
       addBtn("caseLower"); addBtn("caseUpper"); addBtn("caseTitle"); addSep();
+      addBtn("fmtBold"); addBtn("fmtItalic"); addBtn("fmtUnder"); addSep();
+      addBtn("fmtAL"); addBtn("fmtAC"); addBtn("fmtAR"); addBtn("fmtWrap"); addSep();
       addBtn("fillDown"); addBtn("fillRight"); addSep();
       addBtn("sortAsc"); addBtn("sortDesc"); addBtn("autofit"); addSep();
       addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
       addBtn("insCol"); addBtn("insColR");
-      addBtn("delRow"); addBtn("delCol");
+      addBtn("delRow"); addBtn("delCol"); addSep();
+      addBtn("fmtClear");
     } else if (kinds.includes("row")) {
       addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
       addBtn("delRow");
@@ -2147,8 +2602,18 @@ Object.defineProperty(window, "__tabula", {
     get active() { return act; },
     setSel, setSelRow, setSelCol, extendSel, clearSel,
     selectWholeGrid, activeCell, isMulti,
+    render,
+    pushHistory,
+    applyFormatToSelection,
+    clearFormatting,
+    effectiveFormat,
+    applyFmt, updateFmtToolbar, allHave, alignOfSel,
+    rowFromY,
+    windowBounds,
     computeStats,
     cellNumericInfo,
+    typeInfo,
+    columnType,
     loadSample,
     fillDown, fillRight, applyCase,
     findNext, doReplace, openFind, closeFind,
