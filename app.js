@@ -3702,6 +3702,19 @@ function insertCol(at, name) {
   state.headers.splice(at, 0, name);
   for (const r of state.rows) { r.splice(at, 0, ""); }
   colWidths.splice(at, 0, DEFAULT_COL_W);
+  // Shift the sort and filter keys past the newly inserted column the same
+  // way the delete paths shift them past removed columns, so the indicator /
+  // filter doesn't land one-off on a different header after an insert.
+  if (typeof state.sortCol === "number" && state.sortCol >= at) state.sortCol++;
+  {
+    const next = {};
+    for (const k of Object.keys(state.filters)) {
+      const kk = +k;
+      const nk = kk >= at ? kk + 1 : kk;
+      next[nk] = state.filters[k];
+    }
+    state.filters = next;
+  }
   markDirty(); pushHistory(); render();
   showToast("Column inserted");
 }
