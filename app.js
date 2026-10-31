@@ -419,6 +419,7 @@ const state = {
   historyIndex: -1,
   formats: {},      // { "r,c": {bold?,italic?,underline?,align?,wrap?} } — per-cell overrides
   cfRules: [],       // conditional-formatting rules (see the Conditional-formatting section)
+  frozen: 0,         // number of top data rows pinned (0 = none). View-only; not in undo history.
 };
 // Per-cell formatting: { "r,c": {bold,italic,underline,align,wrap} } — values
 // are set only when they differ from the default so snapshots stay compact.
@@ -426,7 +427,8 @@ const state = {
 const LS_KEY = "tabula:v1";
 const HISTORY_MAX = 50; // cap undo snapshots so a large grid doesn't bloat memory
 let isSaved = true; // false once the grid diverges from any exported/saved file
-let windowState = null; // { start, end, vis } shared by renderBody() and renderStats()
+let windowState = null; // { vis, prefix, F } — F = number of frozen (top) rows, 0 = none
+const HEADER_H = 34;    // pixel height of the sticky grid header (matches .grid thead th)
 
 const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {}, cfRules: state.cfRules || [] });
 const restore = (snap) => {
@@ -442,6 +444,7 @@ const restore = (snap) => {
 const $ = id => document.getElementById(id);
 const scroller = $("scroller");
 const head = $("head");
+const frozenBody = $("frozen");
 const body = $("body");
 const colgroup = $("colgroup");
 const empty = $("empty");
@@ -535,6 +538,7 @@ function saveToLocal() {
       filename: filenameInput.value,
       headers: state.headers,
       rows: state.rows,
+      frozen: state.frozen || 0,
     }));
   } catch (_) { /* quota / private mode */ }
 }
@@ -554,6 +558,8 @@ function loadFromLocal() {
     for (const r of d.rows) while (r.length < maxC) r.push("");
     state.headers = d.headers;
     state.rows = d.rows;
+    if (typeof d.frozen === "number" && d.frozen >= 0) state.frozen = d.frozen;
+    else state.frozen = 0;
     if (d.filename) filenameInput.value = d.filename;
     resetState(true);
     state.history = []; state.historyIndex = -1;
@@ -710,6 +716,7 @@ function render() {
   renderHeader();
   renderBody();
   renderStats();
+  updateFreezeUI();
   if (chart) updateChartUI();
 }
 
@@ -1015,23 +1022,44 @@ const lowerBound = (arr, x) => { let lo = 0, hi = arr.length; while (lo < hi) { 
 const upperBound = (arr, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= x) lo = m + 1; else hi = m; } return lo; };
 
 function windowBounds() {
-  const vis = windowState.vis, prefix = windowState.prefix, n = vis.length;
-  if (n === 0) return { s: 0, e: 0 };
+  const ws = windowState, vis = ws.vis, prefix = ws.prefix, F = ws.F || 0, n = vis.length;
+  if (n === 0) return { s: F, e: F - 1, spacer: 0 };
   const st = scroller.scrollTop, vh = scroller.clientHeight || 800;
   let s = Math.max(0, upperBound(prefix, st) - 1);
   let e = Math.min(n - 1, lowerBound(prefix, st + vh));
   s = Math.max(0, s - OVERSCAN);
   e = Math.min(n - 1, e + OVERSCAN);
-  return { s, e };
+  // Pinned rows (indices 0..F-1) are always rendered in #frozen (sticky). The #body
+  // window covers only the free region: clamp s to F, and the spacer to the
+  // scrolled-past FREE height (prefix[s] minus the frozen block's height).
+  s = Math.max(s, F);
+  const spacer = Math.max(0, Math.min(prefix[s] - prefix[F], prefix[prefix.length - 1] - prefix[F]));
+  return { s, e, spacer };
 }
 function paintBody() {
-  const vis = windowState.vis, n = vis.length, searching = state.searchQuery !== "";
-  const filtered = hasActiveFilterSet();
-  const { s, e } = windowBounds();
+  const ws = windowState, vis = ws.vis, prefix = ws.prefix, F = ws.F || 0, n = vis.length;
+  const searching = state.searchQuery !== "", filtered = hasActiveFilterSet();
+  const { s, e, spacer } = windowBounds();
+
+  // Pinned top rows — always in the DOM, sticky just below the grid header.
+  let frozenHtml = "";
+  if (F > 0) {
+    for (let k = 0; k < F; k++) {
+      const i = vis[k];
+      const parts = [];
+      if (i % 2 === 1) parts.push("zebra");
+      if (searching) parts.push("is-match");
+      if (act && act.r === i) parts.push("active-row");
+      frozenHtml += rowHtml(i, (parts.join(" ") + " frozen-row").trim(), HEADER_H + prefix[k]);
+    }
+  }
+  frozenBody.innerHTML = F > 0 ? frozenHtml : "";
+
+  // Free region — #padTop spacer + the visible window + the row-add row.
   let html = `<tr id="padTop" class="pad" aria-hidden="true"><td style="width:100%;"></td></tr>`;
   if ((searching || filtered) && n === 0) {
     html += `<tr class="no-match"><td colspan="${state.headers.length + 2}">No rows match the current filters / search</td></tr>`;
-  } else if (n > 0) {
+  } else if (n > F) {
     for (let p = s; p <= e; p++) {
       const i = vis[p];
       const parts = [];
@@ -1047,7 +1075,7 @@ function paintBody() {
     <td class="rowdel"></td>
   </tr>`;
   body.innerHTML = html;
-  body.querySelector("#padTop").style.height = windowState.prefix[s] + "px";
+  body.querySelector("#padTop").style.height = spacer + "px";
 }
 // Absolute row index under a point in the grid's content coordinate space.
 function rowFromY(contentY) {
@@ -1059,7 +1087,8 @@ function renderBody() {
   const vis = visibleRows();
   const prefix = [0];
   for (const i of vis) prefix.push(prefix[prefix.length - 1] + visibleRowHeight(i));
-  windowState = { vis, prefix, totalH: prefix[prefix.length - 1] };
+  const F = Math.min(state.frozen || 0, vis.length);
+  windowState = { vis, prefix, F, totalH: prefix[prefix.length - 1] };
   paintBody();
   if (state.editingRow >= 0) {
     const input = body.querySelector('.cell-input[data-ri="' + state.editingRow + '"][data-c="' + state.editingCol + '"]');
@@ -1067,10 +1096,15 @@ function renderBody() {
   }
 }
 
-function rowHtml(i, cls) {
+function rowHtml(i, cls, frozenTop) {
+  // frozenTop: when set, every <td> becomes position:sticky at top=frozenTop with a
+  // z-index that keeps it above free (non-sticky) cells painted later in the same
+  // row / below. The <tr> itself is NOT sticky (browsers don't honour tr:sticky),
+  // so we pin each cell — the visual result is identical.
+  const fz = frozenTop != null ? ` style="position:sticky;top:${frozenTop}px;z-index:3"` : "";
   const row = state.rows[i];
   const rowSel = sel && sel.c1 === 0 && sel.c2 >= state.headers.length - 1 && i >= sel.r1 && i <= sel.r2;
-  let h = `<tr class="${cls}${rowSel ? " row-sel" : ""}" data-ri="${i}"><td class="rownum${rowSel ? " sel-row" : ""}">${i + 1}</td>`;
+  let h = `<tr class="${cls}${rowSel ? " row-sel" : ""}${frozenTop != null ? " frozen-row" : ""}" data-ri="${i}"><td class="rownum${rowSel ? " sel-row" : ""}"${fz}>${i + 1}</td>`;
   for (let c = 0; c < state.headers.length; c++) {
     const val = row[c] !== undefined ? row[c] : "";
     const cellSel = sel && i >= sel.r1 && i <= sel.r2 && c >= sel.c1 && c <= sel.c2;
@@ -1081,7 +1115,7 @@ function rowHtml(i, cls) {
         ef.bold ? "f-bold" : "", ef.italic ? "f-italic" : "", ef.underline ? "f-underline" : "",
         "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
       ].filter(Boolean).join(" ");
-      h += `<td class="cell editing${cellSel ? " sel-cell" : ""} ${fcls.trim()}" data-ri="${i}" data-c="${c}"><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
+      h += `<td class="cell editing${cellSel ? " sel-cell" : ""} ${fcls.trim()}" data-ri="${i}" data-c="${c}"${fz}><input type="text" class="cell-input" value="${escAttr(val)}" data-ri="${i}" data-c="${c}"/></td>`;
     } else {
       const isF = typeof val === "string" && val.trim().charAt(0) === "=";
       let dispText = val === undefined ? "" : String(val);
@@ -1106,16 +1140,21 @@ function rowHtml(i, cls) {
         "f-align-" + ef.align, ef.wrap ? "f-wrap" : "",
       ].filter(Boolean).join(" ");
       // Conditional formatting: apply first matching rule's colors as CSS vars.
-      let cfStyleAttr = "";
-      const cfStyle = cfApply(i, c);
-      if (cfStyle) { cls += " cf-on"; cfStyleAttr = ` style="--cf-bg:${cfStyle.bg};--cf-fg:${cfStyle.fg}"`; }
+      let cfStyle = "";
+      const cf = cfApply(i, c);
+      if (cf) { cls += " cf-on"; cfStyle = `--cf-bg:${cf.bg};--cf-fg:${cf.fg};`; }
+      // Merge the CF inline vars with the frozen sticky position into one style="...".
+      const styleParts = [];
+      if (cfStyle) styleParts.push(cfStyle);
+      if (frozenTop != null) styleParts.push(`position:sticky;top:${frozenTop}px;z-index:3`);
+      const styleAttr = styleParts.length ? ` style="${styleParts.join(";")}"` : "";
       const spanCls = dispText === "" ? "cell-display is-empty" : "cell-display";
       const dataT = isErr ? "error" : (resolvedNum !== null ? "number" : ti.type);
       const titleAttr = isF ? ` title="${escAttr("= " + val.trim().slice(1) + "  →  " + dispText)}"` : "";
-      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${dataT}"${cfStyleAttr}${titleAttr}><span class="${spanCls}">${dispText === "" ? "&nbsp;" : esc(dispText)}</span></td>`;
+      h += `<td class="cell${cls} ${fcls}" data-ri="${i}" data-c="${c}" data-type="${dataT}"${styleAttr}${titleAttr}><span class="${spanCls}">${dispText === "" ? "&nbsp;" : esc(dispText)}</span></td>`;
     }
   }
-  h += `<td class="rowdel"><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
+  h += `<td class="rowdel"${fz}><button type="button" class="rowdel-btn" data-action="del-row" data-ri="${i}" title="Delete row ${i + 1}" aria-label="Delete row ${i + 1}">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
   </button></td></tr>`;
   return h;
@@ -1256,7 +1295,10 @@ function colFromX(clientX) {
   for (; c < state.headers.length && x > 0; c++) x -= (colWidths[c] || DEFAULT_COL_W);
   return Math.max(0, Math.min(state.headers.length - 1, c - 1));
 }
-body.addEventListener("mousedown", (e) => {
+// Shared grid interaction handlers — attached to BOTH the virtualised #body and
+// the sticky #frozen tbody so selection / editing / delete work identically in
+// either region.
+function gridMousedown(e) {
   if (e.button !== 0) return;
   if (e.target.closest(".rowdel-btn") || e.target.closest('[data-action="del-row"]') || e.target.closest('[data-action="add-row"]')) return;
   // We call preventDefault below (to stop native text selection during a drag),
@@ -1284,6 +1326,26 @@ body.addEventListener("mousedown", (e) => {
     if (e.shiftKey && sel) extendSel(r, isMulti() ? sel.c2 : sel.c1);
     else setSelRow(r);
   }
+}
+function gridDblclick(e) {
+  const cc = cellFromEvent(e);
+  if (!cc) return;
+  if (state.editingRow >= 0) commitEditing();
+  setSel(cc.r, cc.c);
+  startEdit(cc.r, cc.c);
+}
+function gridClick(e) {
+  const del = e.target.closest('[data-action="del-row"]');
+  if (del) { if (state.editingRow >= 0) commitEditing(); deleteRow(parseInt(del.dataset.ri, 10)); return; }
+  const add = e.target.closest('[data-action="add-row"]');
+  if (add) { if (state.editingRow >= 0) commitEditing(); addRow(); return; }
+  // single-click on a cell is handled by mousedown (select) / dblclick (edit)
+}
+[body, frozenBody].forEach(root => {
+  if (!root) return;
+  root.addEventListener("mousedown", gridMousedown);
+  root.addEventListener("dblclick", gridDblclick);
+  root.addEventListener("click", gridClick);
 });
 document.addEventListener("mousemove", (e) => {
   if (!dragStart) return;
@@ -1297,22 +1359,6 @@ document.addEventListener("mousemove", (e) => {
   if (dragMoved) extendSel(r, col);
 });
 document.addEventListener("mouseup", () => { dragStart = null; });
-
-body.addEventListener("dblclick", (e) => {
-  const cc = cellFromEvent(e);
-  if (!cc) return;
-  if (state.editingRow >= 0) commitEditing();
-  setSel(cc.r, cc.c);
-  startEdit(cc.r, cc.c);
-});
-
-body.addEventListener("click", (e) => {
-  const del = e.target.closest('[data-action="del-row"]');
-  if (del) { if (state.editingRow >= 0) commitEditing(); deleteRow(parseInt(del.dataset.ri, 10)); return; }
-  const add = e.target.closest('[data-action="add-row"]');
-  if (add) { if (state.editingRow >= 0) commitEditing(); addRow(); return; }
-  // single-click on a cell is now handled by mousedown (select) / dblclick (edit)
-});
 // Start a new edit when clicking into the header/gutter while an editor is open.
 document.addEventListener("mousedown", (e) => {
   if (state.editingRow < 0) return;
@@ -2199,6 +2245,49 @@ copyAsMenu.addEventListener("click", (e) => {
   else if (fmt === "json") copyAsJson();
   else if (fmt === "sql") copyAsSql();
 });
+
+/* ============ Freeze panes — pin the top N rows ============
+   Pinned rows live in the #frozen <tbody> and are rendered position:sticky just
+   below the grid header; the virtualised #body window and spacer only cover the
+   free region that scrolls under them. `state.frozen` is the pinned count (0 =
+   none) and is persisted with the file but is NOT part of undo snapshots. */
+const btnFreeze = $("btnFreeze");
+const freezeMenu = $("freezeMenu");
+function setFrozen(n) {
+  const max = Math.max(1, (state.rows.length || 1));
+  const v = Math.max(0, Math.min(n | 0, max));
+  if (v === state.frozen) { updateFreezeUI(); return; }
+  state.frozen = v;
+  markDirty();
+  saveToLocal();
+  render();
+  updateFreezeUI();
+}
+function updateFreezeUI() {
+  const active = state.frozen > 0;
+  if (btnFreeze) {
+    btnFreeze.classList.toggle("on", active);
+    const label = btnFreeze.querySelector("span");
+    if (label) label.textContent = active ? "Frozen (" + state.frozen + ")" : "Freeze";
+  }
+  const chip = document.getElementById("statFreeze");
+  if (chip) {
+    chip.hidden = !active;
+    const txt = document.getElementById("statFreezeText");
+    if (txt) txt.textContent = state.frozen === 1 ? "row 1 frozen" : state.frozen + " rows frozen";
+  }
+  document.body.classList.toggle("frozen-active", active);
+}
+if (btnFreeze && freezeMenu) {
+  btnFreeze.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); toggleMenu(btnFreeze, freezeMenu); });
+  freezeMenu.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-freeze]");
+    if (!b) return;
+    freezeMenu.hidden = true;
+    btnFreeze.setAttribute("aria-expanded", "false");
+    setFrozen(parseInt(b.dataset.freeze, 10));
+  });
+}
 
 /* ============ Conditional formatting (rule engine + modal) ============
    A rule = { range:{r1,r2,c1,c2}|null(all), kind, param?, n?, style:{bg,fg} }.
@@ -3679,6 +3768,9 @@ Object.defineProperty(window, "__tabula", {
     cfApply, cfInRange, cfMatchKind, openCf, closeCf, cfPaintList,
     // Shortcuts overlay
     openShortcuts, closeShortcuts, isInTextTarget,
+    // Freeze panes
+    setFrozen,
+    get frozen() { return state.frozen; },
     // Formula engine (pure, testable) + helpers
     evalFormula,
     resolveCell,

@@ -114,6 +114,9 @@ Then open a file (or drop it onto the window) and you're editing.
   - Add / delete rows and columns, insert above/below and left/right
 - **Layout** — resizable columns (drag the grip, double‑click to auto‑fit), widths
   remembered per file; sticky header; light & dark themes
+- **Freeze panes** — the **Freeze** button pins the top 1 / 2 / 3 / 5 rows so they
+  stay visible while the rest of the grid scrolls; frozen rows keep working (edit,
+  select, delete) and the freeze count is remembered with the file
 - **Move safely** — **Undo / Redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`)
 - **Autosave** to `localStorage` — revisit the same grid later
 - **Export** to `.csv` (button, or `Ctrl/Cmd+S`)

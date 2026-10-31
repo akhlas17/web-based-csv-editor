@@ -185,6 +185,23 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><path d="M14 14l7 7"/><path d="M8.5 8.5L14 3l7 7-5.5 5.5" opacity=".45"/></svg>
           <span>Format</span>
         </button>
+        <span class="sep"></span>
+        <div class="freeze-wrap">
+          <button id="btnFreeze" class="btn" title="Freeze the top rows so they stay visible while you scroll" type="button" aria-haspopup="menu" aria-expanded="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="1"/><path d="M3 10h18"/><path d="M8 14l1.5 2.5M16 14l-1.5 2.5M12 14v-6"/></svg>
+            <span>Freeze</span>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div id="freezeMenu" class="popover" hidden role="menu" aria-label="Freeze panes">
+            <div class="menu-label">Freeze top rows</div>
+            <button type="button" data-freeze="1">Freeze row 1 <span class="dim">top only</span></button>
+            <button type="button" data-freeze="2">Freeze rows 1–2</button>
+            <button type="button" data-freeze="3">Freeze rows 1–3</button>
+            <button type="button" data-freeze="5">Freeze rows 1–5</button>
+            <div class="menu-sep"></div>
+            <button type="button" data-freeze="0">Unfreeze all</button>
+          </div>
+        </div>
       </div>
 
       <div class="search-wrap">
@@ -209,6 +226,7 @@
         <table class="grid" role="grid" aria-label="CSV grid">
           <colgroup id="colgroup"></colgroup>
           <thead id="head"></thead>
+          <tbody id="frozen"></tbody>
           <tbody id="body">
             <tr id="padTop" class="pad" aria-hidden="true"><td style="width:100%"></td></tr>
           </tbody>
@@ -252,6 +270,10 @@
     <footer class="statusbar">
       <div class="status-left">
         <span class="sheet-tab" id="sheetTab" title="Active sheet"><svg class="sheet-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><rect x="4" y="4" width="16" height="16"/><path d="M4 10h16M10 4v16"/></svg><span class="sheet-name" id="sheetName">Sheet1</span></span>
+        <span id="statFreeze" class="stat freeze-chip" hidden title="Rows are pinned at the top — click Freeze to change">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="4" y="5" width="16" height="5" rx="1"/><line x1="12" y1="14" x2="12" y2="19"/></svg>
+          <span id="statFreezeText">row 1 frozen</span>
+        </span>
         <span id="statCounts" class="stat mono">—</span>
         <span id="statSort" class="stat" hidden></span>
         <span id="statSearch" class="stat" hidden></span>
