@@ -1486,7 +1486,44 @@ function closeShortcuts() { helpRoot.hidden = true; }
 if (helpClose) helpClose.addEventListener("click", closeShortcuts);
 if (helpRoot) helpRoot.addEventListener("click", (e) => { if (e.target === helpRoot) closeShortcuts(); });
 
-/* ============ Row / column ops ============ */
+/* ============ Row / column ops ============
+   Per-cell formatting (bold / italic / align / wrap) keys its state by "r,c"
+   cell index. Any operation that inserts, removes, or moves rows must remap
+   those entries so the formatting follows the *data*, not the old slot —
+   otherwise a bolded row lands on a different logical row after an
+   insert-above / delete-above / move.
+
+   `_rowsMap(n, mutate)` replays `mutate` (written token-based, in terms of the
+   pre-mutation row indices) on a token array `[0..n-1]` and returns an
+   old-index → new-index Map. Token semantics:
+     · an ORIGINAL row is its own index (a number) and therefore maps to its
+       new position; moving a block is "remove the tokens then re-insert the
+       same tokens", so moved rows keep their identity and their formatting.
+     · a freshly inserted / duplicated row is `NEW_ROW` (not a number), so it
+       gets no old formatting — correctly.
+     · a deleted row's token is simply gone → it drops out of the map → its
+       formatting is cleared.
+   `_remapFormatsRows` re-keys every "r,c" entry using that map. */
+const NEW_ROW = Symbol("new-row"); // a row with no pre-existing formatting
+function _remapFormatsRows(oldToNew) {
+  if (!state.formats) return;
+  const next = {};
+  for (const k of Object.keys(state.formats)) {
+    const idx = k.indexOf(",");
+    const rr = +k.slice(0, idx), cc = +k.slice(idx + 1);
+    const nr = oldToNew.get(rr);
+    if (nr === undefined) continue;                 // that row was deleted
+    next[nr + "," + cc] = state.formats[k];
+  }
+  state.formats = next;
+}
+function _rowsMap(n, mutate) {
+  const tokens = Array.from({ length: n }, (_, i) => i);
+  mutate(tokens);
+  const m = new Map();
+  tokens.forEach((v, i) => { if (typeof v === "number") m.set(v, i); });
+  return m;
+}
 function addRow() {
   state.rows.push(new Array(state.headers.length).fill(""));
   markDirty();
@@ -1498,10 +1535,12 @@ function addRow() {
 
 function deleteRow(ri) {
   if (state.rows.length === 0) return;
+  const lenBefore = state.rows.length;
   if (state.rows.length === 1) {
     confirmAction("Delete the only row?", "This clears every row of the grid.", () => {
       state.rows = [];
       state.selectedRow = -1;
+      _remapFormatsRows(_rowsMap(lenBefore, t => { t.length = 0; }));
       markDirty();
       pushHistory();
       render();
@@ -1511,6 +1550,7 @@ function deleteRow(ri) {
   }
   state.rows.splice(ri, 1);
   state.selectedRow = Math.min(Math.max(0, ri), state.rows.length - 1);
+  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(ri, 1)));
   markDirty();
   pushHistory();
   render();
@@ -3248,9 +3288,15 @@ function deleteSelectedRows() {
   if (!sel) return;
   const set = new Set(); for (let r = sel.r1; r <= sel.r2; r++) set.add(r);
   const n = set.size;
+  const lenBefore = state.rows.length;
   confirmAction(`Delete ${n} row${n === 1 ? "" : "s"}?`, "Permanently removed from the grid. Undo is available after.", () => {
     state.rows = state.rows.filter((_, i) => !set.has(i));
     state.selectedRow = Math.max(0, Math.min(state.selectedRow, state.rows.length - 1));
+    _remapFormatsRows(_rowsMap(lenBefore, t => {
+      const keep = [];
+      for (let i = 0; i < t.length; i++) { if (!set.has(i)) keep.push(t[i]); }
+      t.length = 0; t.push(...keep);
+    }));
     clearSel();
     markDirty(); pushHistory(); render();
     showToast(`Deleted ${n} row${n === 1 ? "" : "s"}`);
@@ -3652,14 +3698,18 @@ function hideCtxMenu() { if (Ctx.hide) Ctx.hide(); }
    these touch shared model, so they live here for discoverability) -------- */
 function insertRowAbove() {
   const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : 0);
+  const lenBefore = state.rows.length;
   state.rows.splice(r, 0, new Array(state.headers.length).fill(""));
+  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(r, 0, NEW_ROW)));
   markDirty(); pushHistory(); render();
   setSel(r, sel ? sel.c1 : 0);
   showToast("Row inserted");
 }
 function insertRowBelow() {
   const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : state.rows.length - 1);
+  const lenBefore = state.rows.length;
   state.rows.splice(r + 1, 0, new Array(state.headers.length).fill(""));
+  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(r + 1, 0, NEW_ROW)));
   markDirty(); pushHistory(); render();
   setSel(r + 1, sel ? sel.c1 : 0);
   showToast("Row inserted");
@@ -3669,9 +3719,13 @@ function duplicateRow() {
   const top = sel && isFullRowSpan() ? sel.r1 : (state.ctx && state.ctx.r !== undefined ? state.ctx.r : (act ? act.r : -1));
   const bot = sel && isFullRowSpan() ? sel.r2 : top;
   if (top < 0 || bot < 0 || top >= state.rows.length) return;
+  const lenBefore = state.rows.length;
   const copies = [];
   for (let r = top; r <= bot; r++) copies.push(state.rows[r].slice());
   state.rows.splice(bot + 1, 0, ...copies);
+  // Duplicated rows are fresh (unformatted): mark each with NEW_ROW so none
+  // inherit the original row's formatting.
+  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(bot + 1, 0, ...(Array(copies.length).fill(NEW_ROW)))));
   markDirty(); pushHistory(); render();
   setSel(bot + 1, sel ? sel.c1 : 0);
   showToast(copies.length + " " + (copies.length === 1 ? "row" : "rows") + " duplicated");
@@ -3683,10 +3737,19 @@ function moveRow(dir) {
   if (top < 0 || bot < 0 || top >= state.rows.length) return;
   if (dir < 0 && top === 0) { showToast("Already at top"); return; }
   if (dir > 0 && bot >= state.rows.length - 1) { showToast("Already at bottom"); return; }
+  const lenBefore = state.rows.length;
   const block = state.rows.slice(top, bot + 1);
   state.rows.splice(top, bot - top + 1);
   const target = dir < 0 ? top - 1 : bot + 1;
   state.rows.splice(target, 0, ...block);
+  // Moved rows keep their identity: capture the block's ORIGINAL tokens, move
+  // them — do NOT drop them and insert fresh markers (that would wipe the
+  // formatting those rows carry).
+  _remapFormatsRows(_rowsMap(lenBefore, t => {
+    const orig = t.slice(top, bot + 1);
+    t.splice(top, bot - top + 1);
+    t.splice(target, 0, ...orig);
+  }));
   markDirty(); pushHistory(); render();
   setSel(dir < 0 ? top - 1 : bot + 1, sel ? sel.c1 : 0);
 }
@@ -3958,7 +4021,7 @@ Object.defineProperty(window, "__tabula", {
     copySelectionRange, selectedRangeTsv,
     findNext, doReplace, openFind, closeFind,
     addRow, addColumn, deleteRow, deleteColumn,
-    duplicateRow, moveRow,
+    insertRowAbove, insertRowBelow, duplicateRow, moveRow,
     clearSelectionCells, deleteSelectedRows,
     undo, redo,
   },
