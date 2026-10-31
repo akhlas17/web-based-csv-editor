@@ -58,8 +58,11 @@ Then open a file (or drop it onto the window) and you're editing.
   - **Save on blur** — click away, press a key, or move on; the value is never lost
 - **Selection engine** — click a cell, row number, or column header; drag to
   multi-select; the whole grid, a row, a column, or any rectangular range
-- **Right-click context menu** — copy, paste, clear, case conversion, formatting,
-  fill, sort, auto-fit, insert/delete rows & columns, duplicate, and more
+- **Right-click context menu** — a two-pane menu with a left category rail
+  (Clipboard · Text · Format · Fill · Sort · Rows · Columns · Freeze) and the items
+  for the active category on the right; hover to switch categories or use the
+  arrow keys (`←`/`→` category, `↑`/`↓` item, `Enter` run, `Esc` close). The items
+  adapt to what you right-click — a cell, a row, or a column header
 - **Statistics bar** — live `Σ Sum` / `x̄ Average` / `min` / `max` / `n Count` for
   the selection, with a `Σ more` menu; understands `$`, `%`, `(1,234)` negatives,
   and dates
@@ -109,14 +112,17 @@ Then open a file (or drop it onto the window) and you're editing.
   - Fill down (`Ctrl/Cmd+D`) and Fill right (`Ctrl/Cmd+Shift+R`)
   - Case conversion: lowercase / UPPERCASE / Title Case
   - Find & Replace (`Ctrl/Cmd+H`) with match-case and whole-cell options
-  - Sort any column by value (numeric or text)
+  - Sort any column by value (numeric or text) — one toggle per header cycles
+    **unsorted → A→Z → Z→A** (a small arrow shows the active direction)
   - Per-column **duplicate** and **move up / down**
   - Add / delete rows and columns, insert above/below and left/right
 - **Layout** — resizable columns (drag the grip, double‑click to auto‑fit), widths
   remembered per file; sticky header; light & dark themes
 - **Freeze panes** — the **Freeze** button pins the top 1 / 2 / 3 / 5 rows so they
-  stay visible while the rest of the grid scrolls; frozen rows keep working (edit,
-  select, delete) and the freeze count is remembered with the file
+  stay visible while the rest of the grid scrolls; right-click any row and choose
+  **Freeze rows above** to freeze everything above *that* row (or **Unfreeze** to
+  clear it). Frozen rows keep working (edit, select, delete) and the freeze count
+  is remembered with the file
 - **Move safely** — **Undo / Redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`)
 - **Autosave** to `localStorage` — revisit the same grid later
 - **Export** to `.csv` (button, or `Ctrl/Cmd+S`)

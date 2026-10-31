@@ -696,6 +696,9 @@ function toggleSort(col) {
 
 /* ============ Rendering ============ */
 function render() {
+  // Self-heal: if rows shrank (deletes) past the remembered freeze count, clamp it
+  // so the chip / frozen tbody never claim more rows exist than there are.
+  if (state.frozen > state.rows.length) state.frozen = state.rows.length;
   const hasData = state.rows.length > 0 || state.headers.length > 0;
   empty.hidden = hasData;
   scroller.style.visibility = hasData ? "" : "hidden";
@@ -787,27 +790,30 @@ function renderHeader() {
     const badge = type.label
       ? `<span class="col-type-badge ${type.cls}" title="Detected type: ${esc(type.title)}">${type.label}</span>`
       : "";
+    // One sort control per header: a state-aware button whose arrow reflects the
+    // *current* direction (up = A→Z, down = Z→A, dimmed when unsorted) and whose
+    // title/aria state the next action. Cycles unsorted → ascending → descending.
+    const sortTitle = !isSorted ? "Sort A → Z"
+      : state.sortDir === 1 ? "Currently A → Z — click for Z → A"
+      : "Currently Z → A — click to clear";
+    const sortAria = !isSorted ? "Sort ascending"
+      : state.sortDir === 1 ? "Sort descending"
+      : "Clear sort";
+    const sortArrow = !isSorted
+      ? '<svg class="arr-none" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 9 12 5 16 9"/><polyline points="8 15 12 19 16 15"/></svg>'
+      : state.sortDir === 1
+      ? '<svg class="arr-asc" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg>'
+      : '<svg class="arr-desc" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
     html += `<th class="${cls}" data-col="${c}"><div class="th-inner">
       <button type="button" class="th-filter ${isFiltered ? "on" : ""}" style="${funnel}" data-action="filter-col" data-col="${c}" title="Filter ${esc(state.headers[c])}" aria-label="Filter ${esc(state.headers[c])}">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
       </button>
       <div class="col-resize" data-col="${c}" title="Drag to resize · double-click to auto-fit" aria-hidden="true"></div>
-      <span class="th-label">${esc(state.headers[c] || "Column " + (c + 1))}
-        ${badge}
-        <svg class="sort-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path data-dir="asc" d="M18 15l-6-6-6 6"/><path data-dir="desc" d="M6 9l6 6 6-6"/>
-        </svg>
-      </span>
+      <span class="th-label">${esc(state.headers[c] || "Column " + (c + 1))}${badge}</span>
       <div class="th-actions">
-        <button type="button" title="Sort ascending" data-action="sort-asc" data-col="${c}" aria-label="Sort ${esc(state.headers[c])} ascending">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 15l-6-6-6 6"/></svg>
-        </button>
-        <button type="button" title="Sort descending" data-action="sort-desc" data-col="${c}" aria-label="Sort ${esc(state.headers[c])} descending">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <button type="button" title="Delete column" class="danger" data-action="del-col" data-col="${c}" aria-label="Delete column ${c + 1}">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+        <button type="button" class="th-sort-toggle" data-action="sort-toggle" data-col="${c}"
+                aria-pressed="${isSorted ? "true" : "false"}"
+                title="${sortTitle}" aria-label="${sortAria}">${sortArrow}</button>
       </div>
     </div></th>`;
   }
@@ -1539,10 +1545,15 @@ head.addEventListener("click", (e) => {
   if (btn) {
     const a = btn.dataset.action, c = parseInt(btn.dataset.col, 10);
     if (a === "add-col") addColumn();
-    else if (a === "del-col") deleteColumn(c);
     else if (a === "filter-col") { openFilterPanel(c); return; }
-    else if (a === "sort-asc") { state.sortCol = c; state.sortDir = 1; applySort(); pushHistory(); render(); }
-    else if (a === "sort-desc") { state.sortCol = c; state.sortDir = -1; applySort(); pushHistory(); render(); }
+    else if (a === "sort-toggle") {
+      // Single button, three-state cycle: unsorted → ascending → descending → unsorted.
+      if (state.sortCol !== c) { state.sortCol = c; state.sortDir = 1; }
+      else if (state.sortDir === 1) { state.sortDir = -1; }
+      else { state.sortCol = -1; state.sortDir = 0; }   // clear sort (match the app's other "none" state)
+      applySort(); pushHistory(); render();
+      return;
+    }
     return;
   }
   const th = e.target.closest("th[data-col]");
@@ -2254,7 +2265,9 @@ copyAsMenu.addEventListener("click", (e) => {
 const btnFreeze = $("btnFreeze");
 const freezeMenu = $("freezeMenu");
 function setFrozen(n) {
-  const max = Math.max(1, (state.rows.length || 1));
+  // Cap at the number of rows (an empty grid can't have any frozen rows, so the
+  // floor stays 0 here — `Math.max(1, …)` would wrongly force one frozen row).
+  const max = state.rows.length || 0;
   const v = Math.max(0, Math.min(n | 0, max));
   if (v === state.frozen) { updateFreezeUI(); return; }
   state.frozen = v;
@@ -2763,12 +2776,24 @@ function setSel(r, c) {
 }
 function setSelRow(r) {
   const c = maxDims().c; r = Math.max(0, Math.min(r, maxDims().r));
-  selAnchor = { r, c: 0 }; act = { r, c }; sel = normSel({ r, c: 0 }, { r, c });
+  selAnchor = { r, c: 0 };
+  // Keep the active cell on the user's previous column (or col 0) instead of the
+  // far corner. The old `{ r, c: last-column }` made the active cell land on the
+  // final column; the next arrow-key nudge then called scrollCellIntoView(r,
+  // lastColumn) and lurched the horizontal scroll to the very right. Anchoring
+  // on the user's column keeps vertical navigation from dragging the view sideways.
+  act = { r, c: act ? act.c : 0 };
+  sel = normSel({ r, c: 0 }, { r, c: c });
   state.selectedRow = r; updateSelection();
 }
 function setSelCol(c) {
   const r = maxDims().r; c = Math.max(0, Math.min(c, maxDims().c));
-  selAnchor = { r: 0, c }; act = { r, c }; sel = normSel({ r: 0, c }, { r, c });
+  selAnchor = { r: 0, c };
+  // Same logic as setSelRow: anchor the active cell's row to the user's previous
+  // row (or 0) so horizontal navigation on a full-column selection doesn't pull
+  // the view down to the last row.
+  act = { r: act ? act.r : 0, c };
+  sel = normSel({ r: 0, c }, { r: r, c });
   state.selectedRow = r; updateSelection();
 }
 function extendSel(r, c) {
@@ -3390,10 +3415,37 @@ head.addEventListener("dblclick", (e) => {
 const Ctx = (() => {
   const el = $("ctxMenu");
 
+  const CTX_ACTIVE_CAT = "ctx-active";
+
+  // Hierarchical context menu: a left "category rail" (Clipboard / Text / Format /
+  // Fill / Sort / Rows / Columns / View) and a right panel of item buttons for the
+  // active category. Hover or keyboard (arrows + Enter) switches categories.
+  // Action `run()` closures read ctxCol()/ctxRow() from state.ctx, so the click
+  // handler must run `a.run()` BEFORE hide() clears state.ctx.
+  const ctxCol = () => (state.ctx && state.ctx.c !== undefined ? state.ctx.c : (act ? act.c : -1));
+  const ctxRow = () => (state.ctx && state.ctx.r !== undefined ? state.ctx.r : (act ? act.r : 0));
+
   const actions = {
     copy:     { label: "Copy",        kbd: "⌘C",  run: () => copySelectionRange() },
     paste:    { label: "Paste",       kbd: "⌘V",  run: pasteFromClipboard },
     clear:    { label: "Clear cells", kbd: "⌫",   run: clearSelectionCells },
+    caseLower:{ label: "Lowercase",   run: () => applyCase("lower") },
+    caseUpper:{ label: "UPPERCASE",   run: () => applyCase("upper") },
+    caseTitle:{ label: "Title Case",  run: () => applyCase("title") },
+    fmtBold:  { label: "Bold",        kbd: "⌘B", run: () => applyFmt("fmtBold", "bold") },
+    fmtItalic:{ label: "Italic",      kbd: "⌘I", run: () => applyFmt("fmtItalic", "italic") },
+    fmtUnder: { label: "Underline",   kbd: "⌘U", run: () => applyFmt("fmtUnder", "underline") },
+    fmtAL:    { label: "Align left",  run: () => applyFmt("fmtAlignL", "align-left") },
+    fmtAC:    { label: "Align center",run: () => applyFmt("fmtAlignC", "align-center") },
+    fmtAR:    { label: "Align right", run: () => applyFmt("fmtAlignR", "align-right") },
+    fmtWrap:  { label: "Word wrap",   run: () => applyFmt("fmtWrap", "wrap") },
+    fmtClear: { label: "Clear formatting", run: () => { clearFormatting(); updateSelection(); } },
+    fillDown: { label: "Fill down",   kbd: "⌘D", run: fillDown },
+    fillRight:{ label: "Fill right",  kbd: "⌘⇧R", run: fillRight },
+    sortAsc:  { label: "Sort A → Z",  run: () => { if (state.sortCol !== (ctxCol() || 0)) state.sortCol = (ctxCol() || 0); state.sortDir = 1; applySort(); pushHistory(); render(); showToast("Sorted A → Z"); } },
+    sortDesc: { label: "Sort Z → A",  run: () => { if (state.sortCol !== (ctxCol() || 0)) state.sortCol = (ctxCol() || 0); state.sortDir = -1; applySort(); pushHistory(); render(); showToast("Sorted Z → A"); } },
+    sortClear:{ label: "Clear sort",  run: () => { state.sortCol = -1; state.sortDir = 0; applySort(); pushHistory(); render(); showToast("Sort cleared"); } },
+    autofit:  { label: "Auto-fit column", run: () => autofitColumn(ctxCol()) },
     insRow:   { label: "Insert row above",   run: insertRowAbove },
     insRowB:  { label: "Insert row below",   run: insertRowBelow },
     dupRow:   { label: "Duplicate row(s)",   run: () => { duplicateRow(); } },
@@ -3403,61 +3455,134 @@ const Ctx = (() => {
     insColR:  { label: "Insert column right",run: insertColRight },
     delRow:   { label: "Delete row(s)", danger: true, run: deleteSelectedRows },
     delCol:   { label: "Delete column", danger: true, run: deleteSelectedColumns },
-    fillDown: { label: "Fill down", kbd: "⌘D", run: fillDown },
-    fillRight:{ label: "Fill right", kbd: "⌘⇧R", run: fillRight },
-    caseLower:{ label: "Lowercase", run: () => applyCase("lower") },
-    caseUpper:{ label: "UPPERCASE", run: () => applyCase("upper") },
-    caseTitle:{ label: "Title Case", run: () => applyCase("title") },
-    fmtBold:  { label: "Bold",       kbd: "⌘B", run: () => applyFmt("fmtBold", "bold") },
-    fmtItalic:{ label: "Italic",     kbd: "⌘I", run: () => applyFmt("fmtItalic", "italic") },
-    fmtUnder: { label: "Underline",  kbd: "⌘U", run: () => applyFmt("fmtUnder", "underline") },
-    fmtAL:    { label: "Align left", run: () => applyFmt("fmtAlignL", "align-left") },
-    fmtAC:    { label: "Align center", run: () => applyFmt("fmtAlignC", "align-center") },
-    fmtAR:    { label: "Align right", run: () => applyFmt("fmtAlignR", "align-right") },
-    fmtWrap:  { label: "Word wrap (on/off)", run: () => applyFmt("fmtWrap", "wrap") },
-    fmtClear: { label: "Clear formatting", run: () => { clearFormatting(); updateSelection(); } },
-    sortAsc:  { label: "Sort A → Z", run: () => sortSelColumn(1) },
-    sortDesc: { label: "Sort Z → A", run: () => sortSelColumn(-1) },
-    autofit:  { label: "Auto-fit column",   run: () => autofitColumn(ctxCol()) },
+    freezeAbove: { label: "Freeze rows above", run: () => {
+        const r = ctxRow();
+        setFrozen(r);
+        showToast(r === 0 ? "Nothing to freeze (first row)" : `Frozen ${r} row${r > 1 ? "s" : ""} above this one`);
+      } },
+    unfreeze: { label: "Unfreeze", run: () => { setFrozen(0); showToast("Unfroze"); } },
   };
 
-  const ctxCol = () => (state.ctx && state.ctx.c !== undefined ? state.ctx.c : (act ? act.c : -1));
+  // Build the two-pane layout once from the per-kind category definitions.
+  // `CATS(kinds)` returns [{key,label,items:[actionIds,...]}] in order.
+  function catsFor(kinds) {
+    if (kinds.includes("cell")) return [
+      { key: "clipboard", label: "Clipboard", items: ["copy", "paste", "clear"] },
+      { key: "text",      label: "Text",      items: ["caseLower", "caseUpper", "caseTitle"] },
+      { key: "format",    label: "Format",    items: ["fmtBold", "fmtItalic", "fmtUnder", "sep", "fmtAL", "fmtAC", "fmtAR", "fmtWrap", "sep", "fmtClear"] },
+      { key: "fill",      label: "Fill",      items: ["fillDown", "fillRight"] },
+      { key: "sort",      label: "Sort",      items: ["sortAsc", "sortDesc", "sortClear", "sep", "autofit"] },
+      { key: "rows",      label: "Rows",      items: ["insRow", "insRowB", "dupRow", "moveUp", "moveDn", "sep", "delRow"] },
+      { key: "columns",   label: "Columns",   items: ["insCol", "insColR", "sep", "delCol"] },
+      { key: "view",      label: "Freeze",    items: ["freezeAbove", "unfreeze"] },
+    ];
+    if (kinds.includes("row")) return [
+      { key: "rows",      label: "Rows",      items: ["insRow", "insRowB", "dupRow", "moveUp", "moveDn", "sep", "delRow"] },
+      { key: "view",      label: "Freeze",    items: ["freezeAbove", "unfreeze"] },
+    ];
+    if (kinds.includes("col")) return [
+      { key: "columns",   label: "Columns",   items: ["insCol", "insColR", "sep", "delCol"] },
+      { key: "sort",      label: "Sort",      items: ["sortAsc", "sortDesc", "sortClear", "sep", "autofit"] },
+    ];
+    return [
+      { key: "clipboard", label: "Clipboard", items: ["copy", "paste"] },
+      { key: "rows",      label: "Rows",      items: ["insRow"] },
+      { key: "columns",   label: "Columns",   items: ["insCol"] },
+    ];
+  }
 
-  function addBtn(id, labelOverride) {
-    const a = actions[id]; if (!a) return;
+  let cats = [];                       // current category list (for keyboard nav)
+  let activeCat = 0;
+
+  function itemButton(id) {
+    const a = actions[id]; if (!a) return null;
     const btn = document.createElement("button");
     btn.type = "button";
     if (a.danger) btn.className = "danger";
     const span = document.createElement("span");
-    span.textContent = labelOverride || a.label;
+    span.textContent = a.label;
     btn.appendChild(span);
     if (a.kbd) { const k = document.createElement("kbd"); k.textContent = a.kbd; btn.appendChild(k); }
-    btn.addEventListener("click", () => { hide(); a.run(); });
-    el.appendChild(btn);
+    // run() BEFORE hide(): action closures read ctxCol()/ctxRow() from state.ctx.
+    btn.addEventListener("click", () => { a.run(); hide(); });
+    btn.addEventListener("mouseenter", () => { /* no-op */ });
+    return btn;
   }
-  function addSep() { const d = document.createElement("div"); d.className = "ctx-sep"; el.appendChild(d); }
+
+  function setCategory(idx, focusFirst) {
+    activeCat = Math.max(0, Math.min(idx, cats.length - 1));
+    el.querySelectorAll(".ctx-cat").forEach((b, i) => b.classList.toggle(CTX_ACTIVE_CAT, i === activeCat));
+    el.querySelectorAll(".ctx-panel").forEach((p, i) => p.hidden = (i !== activeCat));
+    if (focusFirst) {
+      const first = el.querySelectorAll(".ctx-panel")[activeCat] && el.querySelectorAll(".ctx-panel")[activeCat].querySelector("button");
+      if (first) first.focus();
+    }
+  }
 
   function buildMenu(kinds) {
     el.innerHTML = "";
-    if (kinds.includes("cell")) {
-      addBtn("copy"); addBtn("paste"); addBtn("clear"); addSep();
-      addBtn("caseLower"); addBtn("caseUpper"); addBtn("caseTitle"); addSep();
-      addBtn("fmtBold"); addBtn("fmtItalic"); addBtn("fmtUnder"); addSep();
-      addBtn("fmtAL"); addBtn("fmtAC"); addBtn("fmtAR"); addBtn("fmtWrap"); addSep();
-      addBtn("fillDown"); addBtn("fillRight"); addSep();
-      addBtn("sortAsc"); addBtn("sortDesc"); addBtn("autofit"); addSep();
-      addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
-      addBtn("insCol"); addBtn("insColR");
-      addBtn("delRow"); addBtn("delCol"); addSep();
-      addBtn("fmtClear");
-    } else if (kinds.includes("row")) {
-      addBtn("insRow"); addBtn("insRowB"); addBtn("dupRow"); addBtn("moveUp"); addBtn("moveDn"); addSep();
-      addBtn("delRow");
-    } else if (kinds.includes("col")) {
-      addBtn("insCol"); addBtn("insColR"); addBtn("sortAsc"); addBtn("sortDesc"); addBtn("autofit"); addBtn("delCol");
-    } else {
-      addBtn("copy"); addBtn("paste"); addSep(); addBtn("insRow"); addBtn("insCol");
+    cats = catsFor(kinds);
+    activeCat = 0;
+    el.classList.add("ctx-hier");
+
+    const rail = document.createElement("div");
+    rail.className = "ctx-rail";
+    const panels = document.createElement("div");
+    panels.className = "ctx-panels";
+
+    cats.forEach((cat, i) => {
+      const railBtn = document.createElement("button");
+      railBtn.type = "button";
+      railBtn.className = "ctx-cat";
+      railBtn.textContent = cat.label;
+      railBtn.addEventListener("mouseenter", () => setCategory(i, false));
+      railBtn.addEventListener("click", (e) => { e.stopPropagation(); setCategory(i, true); });
+      railBtn.addEventListener("focus", () => setCategory(i, false));
+      rail.appendChild(railBtn);
+
+      const panel = document.createElement("div");
+      panel.className = "ctx-panel";
+      panel.hidden = i !== 0;
+      cat.items.forEach((id, j) => {
+        if (id === "sep") {
+          const d = document.createElement("div"); d.className = "ctx-sep"; panel.appendChild(d);
+        } else {
+          const b = itemButton(id);
+          if (b) {
+            b.dataset.cat = i;
+            b.dataset.idx = (panel.querySelectorAll("button").length);
+            panel.appendChild(b);
+          }
+        }
+      });
+      panels.appendChild(panel);
+    });
+
+    el.appendChild(rail);
+    el.appendChild(panels);
+    setCategory(0, false);
+  }
+
+  // Arrow-key navigation across the two panes.
+  function onCtxKeydown(e) {
+    const panel = el.querySelectorAll(".ctx-panel")[activeCat];
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      setCategory(activeCat + (e.key === "ArrowRight" ? 1 : -1), true);
+      return;
     }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      if (!panel) return;
+      e.preventDefault();
+      const items = [...panel.querySelectorAll("button")];
+      if (!items.length) return;
+      let i = items.indexOf(document.activeElement);
+      i = (i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[i].focus();
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); hide(); return; }
+    // Enter is left to the browser so the focused button activates normally.
   }
 
   function show(x, y, kinds, target) {
@@ -3468,6 +3593,8 @@ const Ctx = (() => {
     const w = el.offsetWidth, h = el.offsetHeight;
     el.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
     el.style.top  = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
+    const first = el.querySelector(".ctx-panel:not([hidden]) button");
+    if (first) first.focus();
   }
   function hide() { el.hidden = true; state.ctx = null; }
 
@@ -3476,6 +3603,7 @@ const Ctx = (() => {
   }, true);
   scroller.addEventListener("scroll", hide, { passive: true });
   window.addEventListener("blur", hide);
+  el.addEventListener("keydown", onCtxKeydown);
 
   document.addEventListener("contextmenu", (e) => {
     if (!state.rows.length) return;
@@ -3585,13 +3713,6 @@ function deleteSelectedColumns() {
       markDirty(); pushHistory(); render();
       showToast(`Deleted ${set.size} column${set.size === 1 ? "" : "s"}`);
     });
-}
-function sortSelColumn(dir) {
-  const c = (state.ctx && state.ctx.c !== undefined) ? state.ctx.c
-          : (act ? act.c : (sel ? sel.c1 : 0));
-  state.sortCol = c; state.sortDir = dir;
-  applySort(); pushHistory(); render();
-  showToast(`Sorted by "${state.headers[c] || "Column " + (c + 1)}" (dir ${dir > 0 ? "asc" : "desc"})`);
 }
 function pasteFromClipboard() {
   if (!navigator.clipboard || !navigator.clipboard.readText) {
