@@ -3708,12 +3708,39 @@ function insertCol(at, name) {
 function deleteSelectedColumns() {
   if (!sel) return;
   const set = new Set(); for (let c = sel.c1; c <= sel.c2; c++) set.add(c);
-  const names = [...set].map(c => state.headers[c] || "Column " + (c + 1)).join(", ");
+  const names = [...set].sort((a, b) => a - b).map(c => state.headers[c] || "Column " + (c + 1)).join(", ");
   confirmAction(`Delete ${set.size} column${set.size === 1 ? "" : "s"}? (${names})`,
     "Removes from every row. Undo is available after.", () => {
       state.headers = state.headers.filter((_, i) => !set.has(i));
       state.rows = state.rows.map(r => r.filter((_, i) => !set.has(i)));
       colWidths = colWidths.filter((_, i) => !set.has(i));
+      // Sort: if the sorted column was removed, drop the sort; otherwise
+      // remap its index past any removed columns ahead of it. Mirrors the
+      // single-column path in deleteColumn() so the header indicator never
+      // ends up on the wrong column.
+      if (typeof state.sortCol === "number" && state.sortCol >= 0) {
+        const orig = state.sortCol;
+        if (set.has(orig)) { state.sortCol = -1; state.sortDir = 0; }
+        else {
+          let ns = orig;
+          for (const c of set) if (c < orig) ns--;
+          state.sortCol = ns;
+        }
+      }
+      // Filters: drop any filter on a removed column; shift the rest past any
+      // removals ahead of them. Mirrors remapFiltersAfterColRemoval() but
+      // handles multiple concurrent deletions.
+      {
+        const shiftBefore = (n) => { let m = n; for (const c of set) if (c < n) m--; return m; };
+        const next = {};
+        for (const k of Object.keys(state.filters)) {
+          const kk = +k;
+          if (set.has(kk)) continue;
+          const nk = shiftBefore(kk);
+          next[nk] = state.filters[k];
+        }
+        state.filters = next;
+      }
       markDirty(); pushHistory(); render();
       showToast(`Deleted ${set.size} column${set.size === 1 ? "" : "s"}`);
     });
