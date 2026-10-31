@@ -1488,41 +1488,84 @@ if (helpRoot) helpRoot.addEventListener("click", (e) => { if (e.target === helpR
 
 /* ============ Row / column ops ============
    Per-cell formatting (bold / italic / align / wrap) keys its state by "r,c"
-   cell index. Any operation that inserts, removes, or moves rows must remap
-   those entries so the formatting follows the *data*, not the old slot —
-   otherwise a bolded row lands on a different logical row after an
-   insert-above / delete-above / move.
+   cell index, and each conditional-formatting rule in state.cfRules carries a
+   `range: {r1, r2, c1, c2}` over cell indices. Any operation that inserts,
+   removes, or moves rows (or columns) must remap BOTH the formatting entries
+   and every CF rule's range so the styling follows the *data*, not the old
+   slot; otherwise formatting / CF rules land on the wrong logical rows or
+   columns after a mutation.
 
-   `_rowsMap(n, mutate)` replays `mutate` (written token-based, in terms of the
-   pre-mutation row indices) on a token array `[0..n-1]` and returns an
-   old-index → new-index Map. Token semantics:
-     · an ORIGINAL row is its own index (a number) and therefore maps to its
-       new position; moving a block is "remove the tokens then re-insert the
-       same tokens", so moved rows keep their identity and their formatting.
-     · a freshly inserted / duplicated row is `NEW_ROW` (not a number), so it
-       gets no old formatting — correctly.
-     · a deleted row's token is simply gone → it drops out of the map → its
-       formatting is cleared.
-   `_remapFormatsRows` re-keys every "r,c" entry using that map. */
-const NEW_ROW = Symbol("new-row"); // a row with no pre-existing formatting
-function _remapFormatsRows(oldToNew) {
-  if (!state.formats) return;
-  const next = {};
-  for (const k of Object.keys(state.formats)) {
-    const idx = k.indexOf(",");
-    const rr = +k.slice(0, idx), cc = +k.slice(idx + 1);
-    const nr = oldToNew.get(rr);
-    if (nr === undefined) continue;                 // that row was deleted
-    next[nr + "," + cc] = state.formats[k];
-  }
-  state.formats = next;
+   A mutation on one axis produces:
+     · a *survivor* map: old-index → new-index for indices that survive; absent
+       from the map ⇒ deleted.
+     · an *identity* map for the untouched axis: every index maps to itself.
+
+   `_remapFormats(rows, cols)` re-keys every "r,c" entry using both maps.
+   `_remapCfRanges(rows, cols)` remaps each rule.range to its four corners via
+   the two maps, re-normalises r1≤r2 / c1≤c2, and drops the rule if any
+   corner was deleted (its data is gone with it).
+
+   The row/column survivor maps are built from token replays, mirroring the
+   exact splice ops applied to state.rows / state.headers:
+     · a SURVIVING row (or column) is its own original index; moving a block
+       is "remove the tokens then re-insert the same tokens" so it keeps
+       identity and its formatting;
+     · a freshly inserted / duplicated row (or column) is `NEW_ROW` /
+       `NEW_COL` (not a number) so it gets no old formatting;
+     · a deleted row (or column) token is missing from the final list → drops
+       out of the map → its formatting and CF range are cleared. */
+const NEW_ROW = Symbol("new-row"); // token: a row with no pre-existing formatting
+const NEW_COL = Symbol("new-col"); // token: a column with no pre-existing formatting
+function _identityMap(n) {
+  const m = new Map();
+  for (let i = 0; i < n; i++) m.set(i, i);
+  return m;
+}
+function _survivors(tokens) {
+  const m = new Map();
+  tokens.forEach((v, i) => { if (typeof v === "number") m.set(v, i); });
+  return m;
 }
 function _rowsMap(n, mutate) {
   const tokens = Array.from({ length: n }, (_, i) => i);
   mutate(tokens);
-  const m = new Map();
-  tokens.forEach((v, i) => { if (typeof v === "number") m.set(v, i); });
-  return m;
+  return _survivors(tokens);
+}
+function _colsMap(n, mutate) {
+  const tokens = Array.from({ length: n }, (_, i) => i);
+  mutate(tokens);
+  return _survivors(tokens);
+}
+function _remapFormats(rows, cols) {
+  if (!state.formats) return;
+  const next = {};
+  for (const k of Object.keys(state.formats)) {
+    const p = k.indexOf(",");
+    if (p < 0) continue;
+    const rr = +k.slice(0, p), cc = +k.slice(p + 1);
+    const nr = rows.get(rr), nc = cols.get(cc);
+    if (nr === undefined || nc === undefined) continue; // that row or col was deleted
+    next[nr + "," + nc] = state.formats[k];
+  }
+  state.formats = next;
+}
+function _remapCfRanges(rows, cols) {
+  if (!state.cfRules || !state.cfRules.length) return;
+  const out = [];
+  for (const rule of state.cfRules) {
+    const b = rule.range;
+    if (!b) { out.push(rule); continue; }   // a rule with no range applies to all
+    const r1 = rows.get(b.r1), r2 = rows.get(b.r2);
+    const c1 = cols.get(b.c1), c2 = cols.get(b.c2);
+    if (r1 === undefined || r2 === undefined || c1 === undefined || c2 === undefined)
+      continue; // the rule's anchor was deleted
+    out.push({
+      ...rule,
+      range: { r1: Math.min(r1, r2), r2: Math.max(r1, r2),
+               c1: Math.min(c1, c2), c2: Math.max(c1, c2) },
+    });
+  }
+  state.cfRules = out;
 }
 function addRow() {
   state.rows.push(new Array(state.headers.length).fill(""));
@@ -1540,7 +1583,12 @@ function deleteRow(ri) {
     confirmAction("Delete the only row?", "This clears every row of the grid.", () => {
       state.rows = [];
       state.selectedRow = -1;
-      _remapFormatsRows(_rowsMap(lenBefore, t => { t.length = 0; }));
+      {
+        const rm = _rowsMap(lenBefore, t => { t.length = 0; });
+        const cm = _identityMap(state.headers.length);
+        _remapFormats(rm, cm);
+        _remapCfRanges(rm, cm);
+      }
       markDirty();
       pushHistory();
       render();
@@ -1550,7 +1598,12 @@ function deleteRow(ri) {
   }
   state.rows.splice(ri, 1);
   state.selectedRow = Math.min(Math.max(0, ri), state.rows.length - 1);
-  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(ri, 1)));
+  {
+    const rm = _rowsMap(lenBefore, t => t.splice(ri, 1));
+    const cm = _identityMap(state.headers.length);
+    _remapFormats(rm, cm);
+    _remapCfRanges(rm, cm);
+  }
   markDirty();
   pushHistory();
   render();
@@ -1568,6 +1621,7 @@ function addColumn() {
 }
 
 function deleteColumn(c) {
+  const rowsBefore = state.rows.length, colsBefore = state.headers.length;
   confirmAction(`Delete column "${state.headers[c] || "Column " + (c + 1)}"?`,
     "Removes this column from every row. Undo is available after.", () => {
       state.headers.splice(c, 1);
@@ -1576,6 +1630,13 @@ function deleteColumn(c) {
       if (state.sortCol === c) { state.sortCol = -1; state.sortDir = 0; }
       else if (state.sortCol > c) state.sortCol--;
       remapFiltersAfterColRemoval(c);
+      // Remap the "c" index of per-cell formatting; drop CF rules whose range
+      // touched the deleted column so highlighting doesn't drift.
+      {
+        const cm = _colsMap(colsBefore, t => t.splice(c, 1));
+        const rm = _identityMap(rowsBefore);
+        _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+      }
       markDirty();
       pushHistory();
       render();
@@ -3292,11 +3353,15 @@ function deleteSelectedRows() {
   confirmAction(`Delete ${n} row${n === 1 ? "" : "s"}?`, "Permanently removed from the grid. Undo is available after.", () => {
     state.rows = state.rows.filter((_, i) => !set.has(i));
     state.selectedRow = Math.max(0, Math.min(state.selectedRow, state.rows.length - 1));
-    _remapFormatsRows(_rowsMap(lenBefore, t => {
-      const keep = [];
-      for (let i = 0; i < t.length; i++) { if (!set.has(i)) keep.push(t[i]); }
-      t.length = 0; t.push(...keep);
-    }));
+    {
+      const rm = _rowsMap(lenBefore, t => {
+        const keep = [];
+        for (let i = 0; i < t.length; i++) { if (!set.has(i)) keep.push(t[i]); }
+        t.length = 0; t.push(...keep);
+      });
+      const cm = _identityMap(state.headers.length);
+      _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+    }
     clearSel();
     markDirty(); pushHistory(); render();
     showToast(`Deleted ${n} row${n === 1 ? "" : "s"}`);
@@ -3700,7 +3765,11 @@ function insertRowAbove() {
   const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : 0);
   const lenBefore = state.rows.length;
   state.rows.splice(r, 0, new Array(state.headers.length).fill(""));
-  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(r, 0, NEW_ROW)));
+  {
+    const rm = _rowsMap(lenBefore, t => t.splice(r, 0, NEW_ROW));
+    const cm = _identityMap(state.headers.length);
+    _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+  }
   markDirty(); pushHistory(); render();
   setSel(r, sel ? sel.c1 : 0);
   showToast("Row inserted");
@@ -3709,7 +3778,11 @@ function insertRowBelow() {
   const r = (state.ctx && state.ctx.r !== undefined) ? state.ctx.r : (act ? act.r : state.rows.length - 1);
   const lenBefore = state.rows.length;
   state.rows.splice(r + 1, 0, new Array(state.headers.length).fill(""));
-  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(r + 1, 0, NEW_ROW)));
+  {
+    const rm = _rowsMap(lenBefore, t => t.splice(r + 1, 0, NEW_ROW));
+    const cm = _identityMap(state.headers.length);
+    _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+  }
   markDirty(); pushHistory(); render();
   setSel(r + 1, sel ? sel.c1 : 0);
   showToast("Row inserted");
@@ -3725,7 +3798,11 @@ function duplicateRow() {
   state.rows.splice(bot + 1, 0, ...copies);
   // Duplicated rows are fresh (unformatted): mark each with NEW_ROW so none
   // inherit the original row's formatting.
-  _remapFormatsRows(_rowsMap(lenBefore, t => t.splice(bot + 1, 0, ...(Array(copies.length).fill(NEW_ROW)))));
+  {
+    const rm = _rowsMap(lenBefore, t => t.splice(bot + 1, 0, ...(Array(copies.length).fill(NEW_ROW))));
+    const cm = _identityMap(state.headers.length);
+    _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+  }
   markDirty(); pushHistory(); render();
   setSel(bot + 1, sel ? sel.c1 : 0);
   showToast(copies.length + " " + (copies.length === 1 ? "row" : "rows") + " duplicated");
@@ -3745,11 +3822,15 @@ function moveRow(dir) {
   // Moved rows keep their identity: capture the block's ORIGINAL tokens, move
   // them — do NOT drop them and insert fresh markers (that would wipe the
   // formatting those rows carry).
-  _remapFormatsRows(_rowsMap(lenBefore, t => {
-    const orig = t.slice(top, bot + 1);
-    t.splice(top, bot - top + 1);
-    t.splice(target, 0, ...orig);
-  }));
+  {
+    const rm = _rowsMap(lenBefore, t => {
+      const orig = t.slice(top, bot + 1);
+      t.splice(top, bot - top + 1);
+      t.splice(target, 0, ...orig);
+    });
+    const cm = _identityMap(state.headers.length);
+    _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+  }
   markDirty(); pushHistory(); render();
   setSel(dir < 0 ? top - 1 : bot + 1, sel ? sel.c1 : 0);
 }
@@ -3762,6 +3843,7 @@ function insertColRight() {
   insertCol(c + 1, "Column " + (c + 2));
 }
 function insertCol(at, name) {
+  const rowsBefore = state.rows.length, colsBefore = state.headers.length;
   state.headers.splice(at, 0, name);
   for (const r of state.rows) { r.splice(at, 0, ""); }
   colWidths.splice(at, 0, DEFAULT_COL_W);
@@ -3778,12 +3860,20 @@ function insertCol(at, name) {
     }
     state.filters = next;
   }
+  // Remap the "c" index of per-cell formatting and every CF-rule range past the
+  // new column so styled cells / CF keep tracking the data, not the old slot.
+  {
+    const cm = _colsMap(colsBefore, t => t.splice(at, 0, NEW_COL));
+    const rm = _identityMap(rowsBefore);
+    _remapFormats(rm, cm); _remapCfRanges(rm, cm);
+  }
   markDirty(); pushHistory(); render();
   showToast("Column inserted");
 }
 function deleteSelectedColumns() {
   if (!sel) return;
   const set = new Set(); for (let c = sel.c1; c <= sel.c2; c++) set.add(c);
+  const rowsBefore = state.rows.length, colsBefore = state.headers.length;
   const names = [...set].sort((a, b) => a - b).map(c => state.headers[c] || "Column " + (c + 1)).join(", ");
   confirmAction(`Delete ${set.size} column${set.size === 1 ? "" : "s"}? (${names})`,
     "Removes from every row. Undo is available after.", () => {
@@ -3816,6 +3906,17 @@ function deleteSelectedColumns() {
           next[nk] = state.filters[k];
         }
         state.filters = next;
+      }
+      // Remap the "c" index of per-cell formatting; drop CF rules whose range
+      // touched a deleted column so highlighting doesn't drift off the data.
+      {
+        const cm = _colsMap(colsBefore, t => {
+          const keep = [];
+          for (let i = 0; i < t.length; i++) { if (!set.has(i)) keep.push(t[i]); }
+          t.length = 0; t.push(...keep);
+        });
+        const rm = _identityMap(rowsBefore);
+        _remapFormats(rm, cm); _remapCfRanges(rm, cm);
       }
       markDirty(); pushHistory(); render();
       showToast(`Deleted ${set.size} column${set.size === 1 ? "" : "s"}`);
