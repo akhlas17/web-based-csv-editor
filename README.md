@@ -23,6 +23,8 @@ extension, `Enter`/`Tab` commit, `F2` formula‑bar edit, `⌘/Ctrl+C/Z/S/D`,
 visible rows are in the DOM.
 
 > **Live demo →** [akhlas17.github.io/web-based-csv-editor](https://akhlas17.github.io/web-based-csv-editor/)
+>
+> Full key list: **[CHEATSHEET.md](CHEATSHEET.md)** — or press `?` inside the app.
 
 ## Look — a native spreadsheet
 
