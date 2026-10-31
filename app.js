@@ -430,7 +430,7 @@ let isSaved = true; // false once the grid diverges from any exported/saved file
 let windowState = null; // { vis, prefix, F } — F = number of frozen (top) rows, 0 = none
 const HEADER_H = 34;    // pixel height of the sticky grid header (matches .grid thead th)
 
-const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {}, cfRules: state.cfRules || [] });
+const save = () => JSON.stringify({ headers: state.headers, rows: state.rows, formats: state.formats || {}, cfRules: state.cfRules || [], sortCol: state.sortCol, sortDir: state.sortDir });
 const restore = (snap) => {
   const d = JSON.parse(snap);
   state.headers = d.headers;
@@ -438,6 +438,10 @@ const restore = (snap) => {
   state.colCount = d.headers.length;
   state.formats = d.formats || {};
   state.cfRules = d.cfRules || [];
+  // Sort state travels with the snapshot so undo/redo of a sort restores the row
+  // order AND clears or re-lights the header indicator (old snapshots omit it).
+  state.sortCol = (d.sortCol === undefined ? -1 : d.sortCol);
+  state.sortDir = (d.sortDir === undefined ? 0 : d.sortDir);
 };
 
 /* ============ DOM refs ============ */
