@@ -1426,7 +1426,13 @@ function selectWholeGrid() {
   extendSel(d.r, d.c);
 }
 function handleGridKey(e) {
-  if (document.activeElement === searchInput) return;
+  // If focus is inside any text-input, let the browser handle the keystroke
+  // (Backspace, Delete, arrow, Enter, etc.); this handler is for the grid
+  // itself, not for text boxes it happens to sit near. The previous guard
+  // only exempted the *row* search input, so Backspace in the filter-search
+  // / filter-text / find & replace inputs (and a few others) hit this branch
+  // and their `preventDefault()` here ate the native delete.
+  if (isInTextTarget(document.activeElement)) return;
   const arrow = arrowDelta(e.key);
   if (arrow) {
     e.preventDefault();
