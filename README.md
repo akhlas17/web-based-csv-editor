@@ -1,4 +1,4 @@
-# Tabula
+# Sheetlet
 
 A fast, privacy‑first CSV editor for the browser. Open a file, work on it like a
 real spreadsheet, and save it back — no account, no server, no build step.
@@ -91,7 +91,9 @@ Then open a file (or drop it onto the window) and you're editing.
     moves (Excel semantics)
 - **Auto-filter** — click a column's funnel to open an Excel‑style filter with
   five modes, plus a live match count as you tweak it:
-  - **In list** — multi‑select the exact values to keep (with per‑value counts)
+  - **In list** — multi‑select the exact values to keep (with per‑value counts),
+    plus a **search box** to narrow the value list while you pick (Google‑Sheets
+    style — hidden values stay checked, so you never lose a selection).
   - **Contains / Starts‑with** — case‑insensitive text filters
   - **Is** — exact match · **Is empty** — keep only blank cells
   - Multiple columns combine with **AND**; the status bar shows `Col: kept/total`

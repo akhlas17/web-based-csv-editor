@@ -1506,6 +1506,29 @@ th.col-sel .th-label { color: var(--accent); }
 .filter-input-values { padding: 2px 0 0; }
 .filter-nc { flex: none; }
 
+/* Values-mode search: a small bar above the value list that narrows shown rows */
+.filter-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-searchbar input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.filter-searchbar input[type="text"]:focus { outline: none; border-color: var(--filter-check); }
+.filter-search-meta { font-size: 11px; flex: none; }
+.filter-item.hide { display: none; }
+
 /* ===================== Stats card ===================== */
 .stats-card { width: min(600px, 94vw); max-height: min(80vh, 640px); display: flex; flex-direction: column; }
 .stats-body { overflow-y: auto; margin-top: 14px; flex: 1; }

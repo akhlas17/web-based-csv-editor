@@ -1,6 +1,6 @@
-# Tabula · Keyboard cheatsheet
+# Sheetlet · Keyboard cheatsheet
 
-Everything in Tabula has a shortcut. Bring this list up inside the app with **`?`**
+Everything in Sheetlet has a shortcut. Bring this list up inside the app with **`?`**
 (the status bar reminds you). Modifier legend:
 
 > **⌘** = Command (macOS) · **Ctrl** on Windows / Linux. The two are interchangeable
@@ -79,3 +79,6 @@ Everything in Tabula has a shortcut. Bring this list up inside the app with **`?
 >   row → **Freeze rows above**; **Unfreeze** clears it.
 > - **Charts**, **Copy as** (Markdown / JSON / SQL), **Auto-filter** and **Sort** are all
 >   one click away in the toolbar or the right-click menu.
+> - **Auto-filter search** — open a column's filter, choose **in list**, and type in the
+>   search box to narrow the value list while you pick (Google‑Sheets style; hidden values
+>   stay checked, so you never lose a selection).

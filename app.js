@@ -424,7 +424,7 @@ const state = {
 // Per-cell formatting: { "r,c": {bold,italic,underline,align,wrap} } — values
 // are set only when they differ from the default so snapshots stay compact.
 // Lives in `state` so undo/redo and localStorage persisting cover it automatically.
-const LS_KEY = "tabula:v1";
+const LS_KEY = "sheetlet:v1";
 const HISTORY_MAX = 50; // cap undo snapshots so a large grid doesn't bloat memory
 let isSaved = true; // false once the grid diverges from any exported/saved file
 let windowState = null; // { vis, prefix, F } — F = number of frozen (top) rows, 0 = none
@@ -1846,15 +1846,21 @@ function filterPredMatches(raw, cfg) {
 /* ----- Auto-filter panel session (not committed until Apply) ----- */
 const FILTER_MODES = ["values", "contains", "starts", "is", "contains-empty"];
 const FILTER_MODE_LABELS = { values:"in list", contains:"contains", starts:"starts with", is:"is", "contains-empty":"is empty" };
-let filterSession = { mode: "values", text: "" };
+let filterSession = { mode: "values", text: "", search: "", selected: new Set() };
 
 // Read the current session into a config object (null = "no filter").
 function filterReadConfig() {
   if (filterSession.mode === "values") {
-    const boxes = [...document.querySelectorAll('#filterPanelBody input.fv')];
-    const vals = boxes.filter(b => b.checked).map(b => b.value);
-    if (vals.length === boxes.length) return null; // everything checked = no filter
-    return { mode: "values", values: vals };
+    // `filterSession.selected` is the authoritative set of values the user
+    // wants to keep. It is maintained independently of the search box (which
+    // only *hides* rows) so that unchecking a row while it is visible — then
+    // later clearing the search and re-checking it — always produces the same
+    // result. We compare against every distinct value in the column so the
+    // "everything on = no filter" case works even under search.
+    const sel = filterSession.selected;
+    const all = new Set(valueCounts(filterCol).map(([v]) => v));
+    if (sel.size === all.size) return null; // every distinct value is allowed
+    return { mode: "values", values: [...sel] };
   }
   if (filterSession.mode === "contains-empty") return { mode: "contains-empty" };
   return { mode: filterSession.mode, text: filterSession.text };
@@ -1864,7 +1870,6 @@ function filterReadConfig() {
 function filterRenderBody() {
   const c = filterCol;
   const entries = valueCounts(c);
-  const curCfg = filterConfig(c);
   const modeSel = FILTER_MODES.map(m => {
     const active = m === filterSession.mode;
     return `<label class="filter-mode-opt ${active ? "on" : ""}">
@@ -1874,19 +1879,29 @@ function filterRenderBody() {
   }).join("");
   let inputHtml = "";
   if (filterSession.mode === "values") {
-    const allowed = curCfg && curCfg.mode === "values" ? new Set(curCfg.values || []) : null;
+    // `filterSession.selected` is the single authoritative set of values the
+    // user wants to keep. It is seeded on panel open (from the existing filter
+    // config, or "all distinct values") and mutated live from the checkboxes,
+    // so hiding/reshuffling the list via the search box never loses a
+    // selection. The `checked` state below is just a reflection of it.
+    const isOn = (val) => filterSession.selected.has(val);
     inputHtml = `<div class="filter-input-values">` +
+      `<div class="filter-searchbar">
+        <input id="filterSearch" type="text" placeholder="Search these values…" spellcheck="false" autocomplete="off" value="${escAttr(filterSession.search)}"/>
+        <span id="filterSearchMeta" class="dim filter-search-meta"></span>
+      </div>` +
+      `<div class="filter-values-list" id="filterValuesList" role="list">` +
       entries.slice(0, 1000).map(([val, n]) => {
-        const checked = allowed ? allowed.has(val) : true;
-        const label = val === "" ? '<span class="dim">(empty)</span>' : esc(val);
-        return `<label class="filter-item">
-          <input type="checkbox" class="fv" value="${escAttr(val)}" ${checked ? "checked" : ""}/>
-          <span class="filter-value">${label}</span>
+        const label = val === "" ? '(empty)' : val;
+        const labelHtml = val === "" ? '<span class="dim">(empty)</span>' : esc(val);
+        return `<label class="filter-item" data-val="${escAttr(label)}" data-count="${n}">
+          <input type="checkbox" class="fv" value="${escAttr(val)}" ${isOn(val) ? "checked" : ""}/>
+          <span class="filter-value">${labelHtml}</span>
           <span class="dim filter-nc">${n}</span>
         </label>`;
       }).join("") +
       (entries.length > 1000 ? `<div class="filter-truncate">Showing first 1000 of ${entries.length} distinct values.</div>` : "") +
-      `</div>`;
+      `</div></div>`;
   } else if (filterSession.mode === "contains-empty") {
     inputHtml = `<div class="filter-input-text"><span class="dim">Keep rows where this column is empty/blank.</span></div>`;
   } else {
@@ -1897,8 +1912,42 @@ function filterRenderBody() {
   }
   filterPanelBody.innerHTML = modeSel + inputHtml;
   filterRefreshLiveCount();
-  const ft = document.getElementById("filterText");
-  if (ft) { ft.focus(); ft.setSelectionRange(ft.value.length, ft.value.length); }
+  if (filterSession.mode === "values") {
+    filterApplySearch(filterSession.search); // re-apply initial visibility
+  } else {
+    const ft = document.getElementById("filterText");
+    if (ft) { ft.focus(); ft.setSelectionRange(ft.value.length, ft.value.length); }
+  }
+}
+
+// Values-mode search (Google Sheets style): narrows which value rows are *visible*.
+// It does NOT change which are *selected* — a user can check "Engineering", then
+// type "des" to find "Sales" and uncheck it; both "Engineering" (hidden) and
+// unchecked "Sales" (visible) end up in the applied set. `filterReadConfig`
+// only counts checked boxes that are visible, so hiding a value hides it from
+// the set without dropping it from the DOM.
+function filterApplySearch(text) {
+  const list = document.getElementById("filterValuesList");
+  if (!list) return;
+  const q = String(text || "").trim().toLowerCase();
+  let matched = 0, matchedRows = 0;
+  let total = 0, totalRows = 0;
+  for (const row of list.querySelectorAll(".filter-item")) {
+    const v = (row.dataset.val || "").toLowerCase();
+    const n = Math.max(0, +(row.dataset.count || 0));
+    const ok = !q || v.includes(q);
+    row.classList.toggle("hide", !ok);
+    total++; totalRows += n;
+    if (ok) { matched++; matchedRows += n; }
+  }
+  const meta = document.getElementById("filterSearchMeta");
+  if (meta) {
+    meta.textContent = q
+      ? (matched === 0 ? `no values match “${text}”`
+                        : `showing ${matched} of ${total} · ${matchedRows} of ${totalRows} rows`)
+      : `showing ${total} values · ${totalRows} rows`;
+  }
+  filterRefreshLiveCount(); // keep the footer "X of Y" honest as search narrows
 }
 
 // "If you clicked Apply right now, how many rows would pass?"
@@ -1912,11 +1961,31 @@ function filterRefreshLiveCount() {
 
 // Delegated (attached once) — survives re-renders of the body.
 filterPanelBody.addEventListener("change", (e) => {
-  if (e.target.name === "fm") { filterSession.mode = e.target.value; filterRenderBody(); }
-  else if (e.target.classList && e.target.classList.contains("fv")) filterRefreshLiveCount();
+  if (e.target.name === "fm") {
+    // Switching modes can change how config() reads `selected`; re-seed it
+    // from the *existing* config when entering values-mode, and from the
+    // current checkbox state otherwise, so each mode starts honest.
+    const c = filterCol, cfg = filterConfig(c);
+    filterSession.mode = e.target.value;
+    if (e.target.value === "values") {
+      const all = new Set(valueCounts(c).map(([v]) => v));
+      filterSession.selected = (cfg && cfg.mode === "values")
+        ? new Set([...(cfg.values || [])].filter((v) => all.has(v)))
+        : all;
+    }
+    filterRenderBody();
+  }
+  else if (e.target.classList && e.target.classList.contains("fv")) {
+    // Keep the authoritative selection in sync with the checkbox.
+    const val = e.target.value;
+    if (e.target.checked) filterSession.selected.add(val);
+    else filterSession.selected.delete(val);
+    filterRefreshLiveCount();
+  }
 });
 filterPanelBody.addEventListener("input", (e) => {
   if (e.target.id === "filterText") { filterSession.text = e.target.value; filterRefreshLiveCount(); }
+  else if (e.target.id === "filterSearch") { filterSession.search = e.target.value; filterApplySearch(e.target.value); }
 });
 
 function openFilterPanel(c) {
@@ -1924,6 +1993,15 @@ function openFilterPanel(c) {
   const cfg = filterConfig(c);
   filterSession.mode = cfg ? (cfg.mode || "values") : "values";
   filterSession.text = (cfg && typeof cfg.text === "string") ? cfg.text : "";
+  filterSession.search = "";
+  // Seed the authoritative values set: an existing allow-list, or every distinct
+  // value (i.e. "no filter"). This is what the search box and checkboxes edit.
+  if (filterSession.mode === "values") {
+    const all = new Set(valueCounts(c).map(([v]) => v));
+    filterSession.selected = (cfg && cfg.mode === "values")
+      ? new Set([...(cfg.values || [])].filter((v) => all.has(v)))
+      : all;
+  }
   const colHeader = state.headers[c] || ("Column " + (c + 1));
   const valuesSize = distinctValues(c).size;
   const label = cfg ? (FILTER_MODE_LABELS[cfg.mode] || cfg.mode) : "no filter";
@@ -2848,7 +2926,7 @@ function pasteCells(text) {
 /* ============ Theme ============ */
 function applyTheme(mode) {
   document.documentElement.setAttribute("data-theme", mode);
-  try { localStorage.setItem("tabula:theme", mode); } catch (_) {}
+  try { localStorage.setItem("sheetlet:theme", mode); } catch (_) {}
 }
 btnTheme.addEventListener("click", () => {
   const cur = document.documentElement.getAttribute("data-theme") || "light";
@@ -2856,7 +2934,7 @@ btnTheme.addEventListener("click", () => {
 });
 (function initTheme() {
   let saved = null;
-  try { saved = localStorage.getItem("tabula:theme"); } catch (_) {}
+  try { saved = localStorage.getItem("sheetlet:theme"); } catch (_) {}
   if (saved) applyTheme(saved);
   else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) applyTheme("dark");
   else applyTheme("light");
@@ -3380,7 +3458,7 @@ function selectedRangeTsv() {
 const DEFAULT_COL_W = 120;
 const MIN_COL_W  = 60;
 const MAX_COL_W  = 800;
-const WS_KEY     = "tabula:widths:v1";
+const WS_KEY     = "sheetlet:widths:v1";
 let colWidths = [];
 // The CSS width `max(100%, …)` would stretch the table to the viewport and,
 // under `table-layout: fixed`, distribute that surplus across every column,
@@ -4074,7 +4152,7 @@ if (!loadFromLocal()) loadSample();
 
 // Expose a small, stable API for Playwright / programmatic tests and the console.
 // The UI never calls these — they exist purely for external inspection/driving.
-Object.defineProperty(window, "__tabula", {
+Object.defineProperty(window, "__sheetlet", {
   configurable: true,
   value: {
     state,

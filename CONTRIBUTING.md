@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking at Tabula. It is deliberately small and dependency‑free, so
+Thanks for looking at Sheetlet. It is deliberately small and dependency‑free, so
 we have few rules. The goal is to keep it easy to read, easy to run, and fast.
 
 ## How to work on it
