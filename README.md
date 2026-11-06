@@ -1,7 +1,8 @@
 # Sheetlet
 
-A fast, privacy‑first CSV editor for the browser. Open a file, work on it like a
-real spreadsheet, and save it back — no account, no server, no build step.
+A fast, privacy‑first **spreadsheet editor** for the browser. Open CSV or Excel
+files (`.csv` / `.xlsx` / `.xls` / `.tsv`), work on them like a real spreadsheet,
+and save them back — no account, no server, no build step.
 Everything runs locally in your browser; **your data never leaves your machine**
 (the only network request is an optional web font).
 
@@ -52,7 +53,8 @@ Then open a file (or drop it onto the window) and you're editing.
 
 ## Features
 
-- **Open** CSV files by picking one, dragging one in, or pasting from the clipboard
+- **Open** CSV / Excel files (`.csv`, `.xlsx`, `.xls`, `.tsv`) by picking one,
+  dragging one in, or pasting (CSV/TSV) from the clipboard
 - **Edit like a spreadsheet**
   - `Enter` / `Space` — start (or move-edit) the active cell
   - `Tab` / `Shift+Tab` — move to the next / previous cell
@@ -143,7 +145,8 @@ Then open a file (or drop it onto the window) and you're editing.
 
 The app ships with a small sample dataset so you can feel the keyboard flow
 immediately. Press `Enter` on any cell, `Tab` through it, sort a column, then hit
-`Ctrl/Cmd+S` to download the result as a CSV.
+`Ctrl/Cmd+S` to save as CSV — or open the **Export** menu to write `.csv`, `.tsv`,
+or Excel `.xlsx` (and to open an `.xlsx` file back in).
 
 ## How it works (and how to extend it)
 

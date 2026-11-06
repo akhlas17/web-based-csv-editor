@@ -47,7 +47,7 @@ Everything in Sheetlet has a shortcut. Bring this list up inside the app with **
 
 | Keys                        | Action |
 | --------------------------- | ------ |
-| `Ctrl/⌘` + `S`              | Export / save the grid as a `.csv` file |
+| `Ctrl/⌘` + `S`              | Export / save the grid as `.csv` · or use the **Export** menu for **Excel `.xlsx`** and `.tsv` |
 | `Ctrl/⌘` + `Z`              | Undo |
 | `Ctrl/⌘` + `Shift` + `Z`    | Redo |
 

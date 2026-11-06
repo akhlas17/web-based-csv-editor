@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sheetlet — CSV Editor</title>
+  <title>Sheetlet — Spreadsheet Editor (CSV &amp; Excel)</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23107c41'/%3E%3Cpath d='M8 10h16v2H8zM8 15h10v2H8zM8 20h13v2H8z' fill='white'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -28,7 +28,7 @@
         </span>
         <span class="brand-txt">
           <span class="brand-name">Sheetlet</span>
-          <span class="brand-tag">CSV&nbsp;Editor</span>
+          <span class="brand-tag">Spreadsheet&nbsp;Editor</span>
         </span>
       </div>
 
@@ -54,14 +54,14 @@
           <svg class="ico-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg class="ico-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <label class="btn" title="Open a .csv file from disk">
+        <label class="btn" title="Open a CSV, Excel, or TSV file from disk">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/></svg>
           Open
           <input id="fileInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/tab-separated-values,xlsx/xlsx,xlsx/xls" hidden />
         </label>
 
         <div class="export-wrap">
-          <button id="btnExport" class="btn btn-primary" title="Download as CSV (Ctrl+S)" type="button">
+          <button id="btnExport" class="btn btn-primary" title="Export as CSV, TSV, or Excel (Ctrl+S)" type="button">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Export</span>
           </button>
@@ -105,7 +105,7 @@
           <span>Redo</span>
         </button>
         <span class="sep"></span>
-        <button id="btnPaste" class="btn" title="Paste CSV data from clipboard as the whole grid">
+        <button id="btnPaste" class="btn" title="Paste CSV / TSV data from the clipboard as the whole grid">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
           <span>Paste…</span>
         </button>
@@ -225,7 +225,7 @@
     <!-- ======= Grid ======= -->
     <div id="dropzone">
       <div id="scroller" class="scroller">
-        <table class="grid" role="grid" aria-label="CSV grid">
+        <table class="grid" role="grid" aria-label="Spreadsheet grid">
           <colgroup id="colgroup"></colgroup>
           <thead id="head"></thead>
           <tbody id="frozen"></tbody>
@@ -244,7 +244,7 @@
           <path d="M20.5 20.5l3-3m0 3l-3-3" stroke="white" stroke-width="1.3" stroke-linecap="round"/>
         </svg>
         <h2>No data yet</h2>
-        <p>Open a CSV file, paste data, or drag &amp; drop a file here.</p>
+        <p>Open a CSV or Excel file, paste data, or drag &amp; drop a file here.</p>
         <div class="empty-actions">
           <button id="btnSample" class="btn btn-primary">Load sample data</button>
           <button id="btnEmptyOpen" class="btn">Open file…</button>
@@ -256,14 +256,14 @@
           <span class="empty-pill">Export CSV / TSV / Excel</span>
           <span class="empty-pill">Dark mode</span>
         </div>
-        <div class="empty-foot">Sheetlet · a private CSV editor that never leaves your browser</div>
+        <div class="empty-foot">Sheetlet · a private spreadsheet editor that never leaves your browser</div>
       </div>
 
       <!-- Drag overlay -->
       <div id="dragOverlay" class="drag-overlay" hidden>
         <div class="drag-box">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <p>Drop CSV to load</p>
+          <p>Drop a file to load</p>
         </div>
       </div>
     </div>
@@ -472,7 +472,7 @@
             <div class="help-label">Document</div>
             <div class="help-item"><kbd>⌘/Ctrl+Z</kbd><span>undo</span></div>
             <div class="help-item"><kbd>⌘/Ctrl+⇧+Z</kbd><span>redo</span></div>
-            <div class="help-item"><kbd>⌘/Ctrl+S</kbd><span>export / save CSV</span></div>
+            <div class="help-item"><kbd>⌘/Ctrl+S</kbd><span>export / save (CSV, TSV, Excel)</span></div>
             <div class="help-item"><kbd>⌘/Ctrl+D</kbd><span>fill down</span></div>
             <div class="help-item"><kbd>⌘/Ctrl+⇧+R</kbd><span>fill right</span></div>
           </div>

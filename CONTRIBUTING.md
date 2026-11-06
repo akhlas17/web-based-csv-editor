@@ -24,7 +24,7 @@ we have few rules. The goal is to keep it easy to read, easy to run, and fast.
 
 - Things that make the grid feel faster, safer, or kinder
 - Better keyboard handling and accessibility
-- More correct CSV parsing and export
+- More correct **file parsing** (CSV + Excel) and **export**
 
 ## What we probably won't merge
 
@@ -32,8 +32,8 @@ we have few rules. The goal is to keep it easy to read, easy to run, and fast.
   (for Excel `.xlsx` interop) is the only committed third‑party file and it is
   vendored directly into the repo — no `npm install`, no bundler, no lock file.
   If you feel you need anything else, open an issue first and we'll discuss it.
-- Feature bloat — a spreadsheet with tabs, macros, charts, and so on. Keep it a
-  CSV editor.
+- Feature bloat — a spreadsheet with tabs, macros, and so on. Keep it a focused
+  spreadsheet editor (CSV + Excel in, spreadsheet out).
 - Changes that make the file count go up. Prefer editing the existing files.
 
 ## Tests
