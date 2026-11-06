@@ -10,9 +10,13 @@ index.html   →  the page shell
 styles.css   →  the design system
 app.js       →  all application logic
  parsing.worker.js →  large-file parsing off the main thread
-  ```
+xlsx.full.min.js  →  SheetJS (Excel .xlsx import/export), vendored — loaded as a plain <script>, no build
+```
 
-That's the whole project. No `package.json`, no bundler, no dependencies.
+That's the whole app. **No build step and no runtime dependencies** — open `index.html`
+and it runs. The only third‑party file is SheetJS, committed straight into the repo so
+there is nothing to install. (There *is* a minimal `package.json`, but it exists only
+to describe the optional test runner in `tests/`; the app never uses it.)
 
 ## Keyboard‑driven
 
@@ -129,7 +133,9 @@ Then open a file (or drop it onto the window) and you're editing.
   is remembered with the file
 - **Move safely** — **Undo / Redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`)
 - **Autosave** to `localStorage` — revisit the same grid later
-- **Export** to `.csv` (button, or `Ctrl/Cmd+S`)
+- **Export** to `.csv` (button, or `Ctrl/Cmd+S`) or to **Excel `.xlsx`** from the
+  **Export** menu — numbers, booleans and computed formula values are written as
+  native Excel cells (summable); **Open** also reads `.xlsx` / `.xls` straight back in
 - **Big files stay fast** — DOM virtualization keeps the grid responsive at tens of
   thousands of rows, and parsing runs in a Web Worker so the UI never freezes
 
@@ -156,6 +162,21 @@ A few places that are friendly to tinker with:
 
 The app is plain JavaScript, so a browser devtools console is the fastest way to
 inspect state while you work. There is no build step to keep green.
+
+## Tests
+
+There is no build step to keep green, so the tests are a thin browser harness in
+`tests/` — they drive the *real* app (served locally with `python3 -m http.server`)
+through Playwright and assert on observable behaviour: edit/undo, the filter panel,
+Backspace handling, index‑remap, Excel round‑trip, and accessibility.
+
+```bash
+# one‑time setup (Playwright is a dev-only tool; the app itself still has no deps)
+npm i -g playwright && npx playwright install chromium
+
+# run the whole suite
+npm test            # →  node tests/run-tests.cjs
+```
 
 ## Contributing
 

@@ -512,6 +512,8 @@ let toastTimer = null;
 function showToast(msg, type) {
   toast.textContent = msg;
   toast.className = "toast show" + (type === "error" ? " error" : "");
+  // Errors are important: make sure the live region actually announces them.
+  toast.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
 }
@@ -1388,6 +1390,49 @@ function isInTextTarget(el) {
   if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return true;
   return el.isContentEditable === true;
 }
+
+/* ============ Accessibility / focus management ============
+   Keep keyboard focus trapped inside an open dialog and restore it when the
+   dialog closes, so screen-reader and keyboard users aren't stranded behind
+   the overlay. */
+const FOCUSABLE_SELECTOR = [
+  "a[href]", "button:not([disabled])", "input:not([disabled])",
+  "select:not([disabled])", "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+function focusableIn(root) {
+  if (!root) return [];
+  return [...root.querySelectorAll(FOCUSABLE_SELECTOR)]
+    .filter((el) => el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0);
+}
+let _trapRoot = null, _trapReturn = null;
+function trapFocus(e) {
+  if (e.key !== "Tab" || !_trapRoot) return;
+  const items = focusableIn(_trapRoot);
+  if (!items.length) { e.preventDefault(); return; }
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey) {
+    if (document.activeElement === first || !_trapRoot.contains(document.activeElement)) {
+      e.preventDefault(); last.focus();
+    }
+  } else if (document.activeElement === last || !_trapRoot.contains(document.activeElement)) {
+    e.preventDefault(); first.focus();
+  }
+}
+function beginModalTrap(root) {
+  _trapReturn = document.activeElement;
+  _trapRoot = root;
+  document.addEventListener("keydown", trapFocus, true);
+}
+function endModalTrap() {
+  if (!_trapRoot) return;
+  document.removeEventListener("keydown", trapFocus, true);
+  _trapRoot = null;
+  const ret = _trapReturn; _trapReturn = null;
+  if (ret && document.contains(ret) && typeof ret.focus === "function") {
+    requestAnimationFrame(() => { try { ret.focus(); } catch (_) {} });
+  }
+}
 function arrowDelta(key) {
   if (key === "ArrowUp") return [-1, 0];
   if (key === "ArrowDown") return [1, 0];
@@ -1487,8 +1532,15 @@ document.addEventListener("keydown", (e) => {
 /* ============ Shortcuts overlay (?) ============ */
 const helpRoot = $("helpRoot");
 const helpClose = $("helpClose");
-function openShortcuts() { helpRoot.hidden = false; helpClose.focus(); }
-function closeShortcuts() { helpRoot.hidden = true; }
+function openShortcuts() {
+  helpRoot.hidden = false;
+  beginModalTrap(helpRoot);
+  requestAnimationFrame(() => helpClose.focus());
+}
+function closeShortcuts() {
+  helpRoot.hidden = true;
+  endModalTrap();
+}
 if (helpClose) helpClose.addEventListener("click", closeShortcuts);
 if (helpRoot) helpRoot.addEventListener("click", (e) => { if (e.target === helpRoot) closeShortcuts(); });
 
@@ -1802,6 +1854,85 @@ function readFileAsText(file) {
   });
 }
 
+/* ============ Excel (.xlsx / .xls) — via vendored SheetJS ============
+   SheetJS exposes `XLSX` on the global scope (loaded in index.html). Reading is
+   type-aware: numeric, currency, percent and boolean cells come through as
+   real numbers/bools and are stored as-is; dates become ISO strings; plain
+   text stays text. We keep everything as strings/numbers so the rest of the
+   app (typing, formulas, stats, filters) is unchanged. */
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(Error("read failed"));
+    r.readAsArrayBuffer(file);
+  });
+}
+const xlsxSupported = () => typeof window.XLSX === "object" && window.XLSX !== null;
+function looksLikeExcel(name) {
+  const n = String(name || "").toLowerCase();
+  return n.endsWith(".xlsx") || n.endsWith(".xls");
+}
+// Convert a workbook (as an array buffer) into { headers, data } of strings/numbers.
+function excelToGrid(buf, filename) {
+  const wb = window.XLSX.read(buf, { type: "array", cellDates: false, raw: true, defval: "" });
+  // Prefer the first visible sheet (skip very hidden when there is an alternative).
+  const names = (wb.SheetNames || []).filter(n => {
+    const ws = wb.Workbook && wb.Workbook.Sheets && wb.Workbook.Sheets[wb.SheetNames.indexOf(n)];
+    return !ws || ws.Hidden !== 2; // 2 = very hidden
+  });
+  const sheetName = (names.length ? names : wb.SheetNames)[0];
+  if (!sheetName) throw new Error("no visible sheet");
+  const ws = wb.Sheets[sheetName];
+  const aoa = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "", blankrows: true });
+  if (!aoa.length) return { headers: [], data: [] };
+  const toVal = (v) => {
+    if (v === null || v === undefined) return "";
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "number") return String(v);
+    return String(v);
+  };
+  const normalize = (row) => Array.from(row, toVal).map(v => (typeof v === "string" ? v : String(v)));
+  const width = Math.max(...aoa.map(r => r.length));
+  const padded = (r) => { const a = normalize(r); while (a.length < width) a.push(""); return a; };
+  const headers = padded(aoa[0]);
+  const data = aoa.slice(1).map(padded);
+  // If the sheet has no header-ish first row (e.g. all numbers), keep it as data.
+  return { headers, data, _sheet: sheetName };
+}
+async function loadExcelFile(file) {
+  if (!xlsxSupported()) { showToast("Excel support unavailable (SheetJS missing)", "error"); return; }
+  let res;
+  try {
+    const buf = await readFileAsArrayBuffer(file);
+    res = excelToGrid(buf, file.name);
+  } catch (err) {
+    showToast("Could not read Excel file", "error");
+    return;
+  }
+  const base = file.name.replace(/\.[^.]+$/, "");
+  const sheet = res._sheet && (res._sheet !== file.name.replace(/\.[^.]+$/, "") && res._sheet) ? " (sheet: " + res._sheet + ")" : "";
+  filenameInput.value = base;
+  delete res._sheet;
+  applyLoaded(res.headers, res.data);
+  showToast(`Loaded ${res.data.length} data row${res.data.length === 1 ? "" : "s"}${sheet}`);
+}
+// Unified entry: pick the right reader by file extension (or bytes).
+async function loadFile(file) {
+  if (!file) return;
+  if (looksLikeExcel(file.name)) return loadExcelFile(file);
+  try {
+    const text = await readFileAsText(file);
+    loadText(text, file.name);
+  } catch (_) {
+    // Fall back to treating it as Excel (e.g. a .xls without an .xlsx hint,
+    // or a binary that text-read produced garbage).
+    if (xlsxSupported()) return loadExcelFile(file);
+    showToast("Could not read file", "error");
+  }
+}
+
 /* ============ Column filters ============ */
 
 function remapFiltersAfterColRemoval(removed) {
@@ -2030,11 +2161,14 @@ function openFilterPanel(c) {
   panel.style.left = left + "px";
   panel.style.top  = top  + "px";
   filterPanel._readConfig = filterReadConfig;
+  beginModalTrap(filterPanel);
+  requestAnimationFrame(() => filterPanelClose.focus());
 }
 
 function closeFilterPanel() {
   filterPanelRoot.hidden = true;
   filterCol = -1;
+  endModalTrap();
 }
 function valueCounts(c) {
   const m = new Map();
@@ -2273,14 +2407,15 @@ function updateChartUI() {
 function openChart() {
   chart = { type: "bar", open: false };
   chartRoot.hidden = false;
+  beginModalTrap(chartRoot);
   const model = chartData();
   if (model) drawChart(chartCanvas, model, "bar");
   else chartHint.textContent = "No numeric values — select numeric cells first.";
   if (model) chartCanvas.closest(".chart-canvas-wrap").style.opacity = "1";
   else chartCanvas.closest(".chart-canvas-wrap").style.opacity = "0.4";
-  requestAnimationFrame(() => chartShow.blur());
+  requestAnimationFrame(() => chartClose.focus());
 }
-function closeChart() { chartRoot.hidden = true; }
+function closeChart() { chartRoot.hidden = true; endModalTrap(); }
 function currentChartType() {
   const r = chartRoot.querySelector('input[name=ctype]:checked');
   return r ? r.value : "bar";
@@ -2298,8 +2433,10 @@ function reopenFromFloat() {
   // change type from float → open the modal with current selection
   const cur = currentChartType();
   chartRoot.hidden = false;
+  beginModalTrap(chartRoot);
   const r = chartRoot.querySelector(`input[name=ctype][value="${cur}"]`); if (r) r.checked = true;
   const model = chartData(); if (model) drawChart(chartCanvas, model, cur);
+  requestAnimationFrame(() => chartClose.focus());
 }
 
 btnChart && btnChart.addEventListener("click", openChart);
@@ -2607,8 +2744,10 @@ function openCf() {
   document.querySelector('input[name="cfcolor"][value="2"]').checked = true;
   cfPaintList();
   cfRoot.hidden = false;
+  beginModalTrap(cfRoot);
+  requestAnimationFrame(() => { const f = cfRoot.querySelector("select,input,button"); if (f) f.focus(); });
 }
-function closeCf() { cfRoot.hidden = true; }
+function closeCf() { cfRoot.hidden = true; endModalTrap(); }
 const btnCf = $("btnCf");
 btnCf && btnCf.addEventListener("click", openCf);
 cfRoot && cfRoot.querySelector("#cfClose") && cfRoot.querySelector("#cfClose").addEventListener("click", closeCf);
@@ -2671,6 +2810,7 @@ exportMenu.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-delim]");
   if (!btn) return;
   exportMenu.hidden = true;
+  if (btn.dataset.delim === "xlsx") { exportXlsx(); return; }
   exportWithDelim(btn.dataset.delim);
 });
 
@@ -2754,6 +2894,7 @@ let findCursor = null; // [row, col, offset] of the *next* match to jump to
 function openFind() {
   if (!state.rows.length) { showToast("No data to search", "error"); return; }
   findRoot.hidden = false;
+  beginModalTrap(findRoot);
   findInput.focus();
   findInput.select();
   findCursor = null;
@@ -2761,6 +2902,7 @@ function openFind() {
 }
 function closeFind() {
   findRoot.hidden = true;
+  endModalTrap();
   findInput.value = replaceInput.value = "";
   findCase.checked = findWhole.checked = false;
   findCursor = null;
@@ -3710,8 +3852,16 @@ const Ctx = (() => {
 
   function setCategory(idx, focusFirst) {
     activeCat = Math.max(0, Math.min(idx, cats.length - 1));
-    el.querySelectorAll(".ctx-cat").forEach((b, i) => b.classList.toggle(CTX_ACTIVE_CAT, i === activeCat));
-    el.querySelectorAll(".ctx-panel").forEach((p, i) => p.hidden = (i !== activeCat));
+    el.querySelectorAll(".ctx-cat").forEach((b, i) => {
+      const on = i === activeCat;
+      b.classList.toggle(CTX_ACTIVE_CAT, on);
+      b.setAttribute("aria-expanded", on ? "true" : "false");
+    });
+    el.querySelectorAll(".ctx-panel").forEach((p, i) => {
+      const on = i === activeCat;
+      p.hidden = !on;
+      p.setAttribute("aria-hidden", on ? "false" : "true");
+    });
     if (focusFirst) {
       const first = el.querySelectorAll(".ctx-panel")[activeCat] && el.querySelectorAll(".ctx-panel")[activeCat].querySelector("button");
       if (first) first.focus();
@@ -4043,9 +4193,9 @@ btnEmptyOpen.addEventListener("click", () => fileInput.click());
 
 fileInput.addEventListener("change", (e) => {
   const f = e.target.files[0];
-  if (!f) return;
-  readFileAsText(f).then(text => loadText(text, f.name)).catch(() => showToast("Could not read file", "error"));
   e.target.value = "";
+  if (!f) return;
+  loadFile(f);
 });
 
 btnNew.addEventListener("click", () => {
@@ -4083,7 +4233,7 @@ dropzone.addEventListener("drop", (e) => {
   dragOverlay.hidden = true;
   const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
   if (!f) return;
-  readFileAsText(f).then(text => loadText(text, f.name)).catch(() => showToast("Could not read file", "error"));
+  loadFile(f);
 });
 
 /* ============ Export ============ */
@@ -4112,6 +4262,66 @@ function exportWithDelim(kind) {
 }
 function exportCsv() { exportWithDelim("comma"); }
 
+/* ============ Excel export (.xlsx) — type-aware numbers/booleans ============
+   Every cell is resolved the same way the grid displays it: formulas to their
+   computed value, then classified with typeInfo(). Numbers, currency and
+   percents export as real Excel numbers (summable); booleans as booleans;
+   dates stay ISO strings; everything else as text. SheetJS is required; if it
+   failed to load we degrade to a friendly message rather than a crash. */
+function exportCellValue(r, c) {
+  const raw = state.rows[r] && state.rows[r][c];
+  const s = (raw === undefined || raw === null) ? "" : String(raw);
+  if (s.trim().charAt(0) === "=") {
+    const rv = resolveCell(r, c);
+    if (rv.e) return rv.e.text;
+    if (rv.n !== null && rv.n !== undefined && isFinite(rv.n)) return rv.n;
+    if (rv.text !== undefined) return rv.text;
+    return s;
+  }
+  const ti = typeInfo(s);
+  if (ti.type === "number" || ti.type === "currency" || ti.type === "percent") {
+    return (ti.value !== undefined && isFinite(ti.value)) ? ti.value : s;
+  }
+  if (ti.type === "boolean") return !!ti.bool;
+  return s;
+}
+function exportAoa() {
+  const out = [state.headers.slice()];
+  for (let r = 0; r < state.rows.length; r++) {
+    const row = [];
+    for (let c = 0; c < state.headers.length; c++) row.push(exportCellValue(r, c));
+    out.push(row);
+  }
+  return out;
+}
+function exportXlsx() {
+  if (!xlsxSupported()) { showToast("Excel support is unavailable in this build", "error"); return; }
+  if (state.rows.length === 0 && state.headers.length === 0) { showToast("Nothing to export", "error"); return; }
+  let out;
+  try {
+    const ws = window.XLSX.utils.aoa_to_sheet(exportAoa());
+    const wb = window.XLSX.utils.book_new();
+    const sheetName = (filenameInput.value.trim() || "Sheet").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 31) || "Sheet";
+    window.XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    out = window.XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  } catch (err) {
+    showToast("Could not build the Excel file", "error");
+    return;
+  }
+  const name = (filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
+  const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name + ".xlsx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  markSaved();
+  showToast(`Exported ${name}.xlsx`);
+}
+
 /* ============ Sample data ============ */
 function loadSample() {
   const headers = ["Name", "Department", "Salary", "Joined", "Location"];
@@ -4137,20 +4347,28 @@ function loadSample() {
 
 /* ============ Modal ============ */
 let modalCallback = null;
+function _closeModal() {
+  if (modalRoot.hidden) return;
+  modalRoot.hidden = true;
+  modalCallback = null;
+  endModalTrap();
+}
 function confirmAction(title, text, cb) {
   modalTitle.textContent = title;
   modalText.textContent = text;
   modalRoot.hidden = false;
   modalCallback = cb;
-  modalOk.focus();
+  beginModalTrap(modalRoot);
+  requestAnimationFrame(() => modalOk.focus());
 }
 modalOk.addEventListener("click", () => {
   modalRoot.hidden = true;
   const cb = modalCallback; modalCallback = null;
+  endModalTrap();
   if (cb) cb();
 });
-modalCancel.addEventListener("click", () => { modalRoot.hidden = true; modalCallback = null; });
-modalRoot.addEventListener("click", (e) => { if (e.target === modalRoot) { modalRoot.hidden = true; modalCallback = null; } });
+modalCancel.addEventListener("click", () => _closeModal());
+modalRoot.addEventListener("click", (e) => { if (e.target === modalRoot) _closeModal(); });
 
 /* ============ Init ============ */
 updateUndoButtons();
@@ -4202,6 +4420,10 @@ Object.defineProperty(window, "__sheetlet", {
     typeInfo,
     columnType,
     loadSample,
+    // Excel (.xlsx) import / export (SheetJS is vendored locally in index.html)
+    loadFile, loadExcelFile, excelToGrid,
+    exportAoa, exportXlsx, exportCellValue,
+    xlsxSupported,
     fillDown, fillRight, applyCase,
     copySelectionRange, selectedRangeTsv,
     findNext, doReplace, openFind, closeFind,

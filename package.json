@@ -1,0 +1,14 @@
+{
+  "name": "sheetlet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sheetlet — a privacy-first, client-side CSV and Excel editor. No build step.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node tests/run-tests.cjs"
+  },
+  "devDependencies": {
+    "playwright": "*"
+  },
+  "license": "MIT"
+}

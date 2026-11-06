@@ -28,11 +28,25 @@ we have few rules. The goal is to keep it easy to read, easy to run, and fast.
 
 ## What we probably won't merge
 
-- New dependencies or a build tool (Vite, webpack, TS, React, …). If you think
-  one is truly the right call, open an issue first and we'll discuss it.
+- A build tool (Vite, webpack, TS, React, …) or any *runtime* dependency. SheetJS
+  (for Excel `.xlsx` interop) is the only committed third‑party file and it is
+  vendored directly into the repo — no `npm install`, no bundler, no lock file.
+  If you feel you need anything else, open an issue first and we'll discuss it.
 - Feature bloat — a spreadsheet with tabs, macros, charts, and so on. Keep it a
   CSV editor.
-- Changes that make the file count go up. Prefer editing the four existing files.
+- Changes that make the file count go up. Prefer editing the existing files.
+
+## Tests
+
+There is no build step to keep green, but there *is* a small browser test suite
+in `tests/`. It drives the real app over Playwright (a dev-only tool) and asserts
+observable behaviour — editing, undo, the filter panel, Backspace, index‑remap,
+Excel, and accessibility.
+
+```bash
+npm i -g playwright && npx playwright install chromium   # once
+npm test                                                    # →  node tests/run-tests.cjs
+```
 
 ## Pull requests
 

@@ -1606,6 +1606,18 @@ th.col-sel .th-label { color: var(--accent); }
 .scroller::-webkit-scrollbar-corner { background: transparent; }
 .scroller { scrollbar-color: #cdd2de var(--surface); }
 
+/* Accessible, always-visible focus indicator. Catches any focusable element
+   that still relies on the browser default, in BOTH themes. Components that
+   define their own `outline:none` + box-shadow are more specific and keep
+   their bespoke ring, so this acts only as a safety net. */
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
