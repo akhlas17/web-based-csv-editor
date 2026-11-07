@@ -48,6 +48,8 @@ Everything in Sheetlet has a shortcut. Bring this list up inside the app with **
 | Keys                        | Action |
 | --------------------------- | ------ |
 | `Ctrl/⌘` + `S`              | Export / save the grid as `.csv` · or use the **Export** menu for **Excel `.xlsx`** and `.tsv` |
+| the **Report** button       | Download a **single self‑contained HTML report** (snapshot + stats + SVG chart) — works offline, no assets |
+| the **📷 Photo → table** button | OCR a screenshot/photo of a table into an editable grid (Tesseract.js, lazy CDN) |
 | `Ctrl/⌘` + `Z`              | Undo |
 | `Ctrl/⌘` + `Shift` + `Z`    | Redo |
 

@@ -2811,7 +2811,159 @@ exportMenu.addEventListener("click", (e) => {
   if (!btn) return;
   exportMenu.hidden = true;
   if (btn.dataset.delim === "xlsx") { exportXlsx(); return; }
+  if (btn.dataset.delim === "report") { downloadReport(); return; }
   exportWithDelim(btn.dataset.delim);
+});
+
+const btnReport = $("btnReport");
+if (btnReport) btnReport.addEventListener("click", (e) => { e.preventDefault(); downloadReport(); });
+
+/* ============ OCR: photo → table (feature #5) ============
+   Convert a photo / screenshot of a table into grid rows, fully in the
+   browser. Tesseract.js is loaded *lazily* from a CDN on first use (it is
+   ~1–4 MB, so we never pay for it unless the user tries OCR) — this is the ONE
+   network request the product otherwise avoids, and it runs locally.
+
+   Pipeline:
+     1. Read the image → run Tesseract.createWorker().recognize() → raw text.
+     2. Heuristic text→table (pure/testable via ocrTextToTable()):
+          - lines with a clear delimiter (tab, 2+ spaces, or |) are split on it;
+          - otherwise, columns = the most-common word count across rows (a
+            "word grid"), extra words folded into the last cell.
+     3. First line = headers; remaining lines = data (padded to equal width).
+   All of this is testable without a real image by calling ocrTextToTable(). */
+
+const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+let tesseractPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractPromise) return tesseractPromise;
+  tesseractPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = TESSERACT_CDN;
+    s.async = true;
+    s.onload = () => window.Tesseract ? resolve(window.Tesseract) : reject(new Error("Tesseract failed to load"));
+    s.onerror = () => { tesseractPromise = null; reject(new Error("OCR engine could not load (network blocked?)")); };
+    document.head.appendChild(s);
+  });
+  return tesseractPromise;
+}
+const ocrSupported = () => typeof loadTesseract === "function";
+
+async function ocrImageToText(file, onProgress) {
+  const Tesseract = await loadTesseract();
+  const url = URL.createObjectURL(file);
+  try {
+    const worker = await Tesseract.createWorker("eng", 1, { logger: onProgress ? (m) => {
+      if (m.status === "recognizing text" && Number.isFinite(m.progress)) onProgress(m.progress);
+    } : undefined });
+    const { data } = await worker.recognize(url);
+    await worker.terminate();
+    return (data && data.text) ? data.text.trim() : "";
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// --- Heuristic text → table (pure, testable) ------------------------------
+function ocrColumnCount(lines) {
+  const counts = lines.map((l) => l.trim().split(/\s+/).filter(Boolean).length).filter(Boolean);
+  if (!counts.length) return 1;
+  // Most common word count wins (a table's columns are consistent across rows).
+  // Ties → the smaller count (safer than over-splitting a single line).
+  const tally = {};
+  for (const n of counts) tally[n] = (tally[n] || 0) + 1;
+  let best = 1, bestN = -1;
+  for (const nStr of Object.keys(tally)) {
+    const n = parseInt(nStr, 10), freq = tally[nStr];
+    if (freq > bestN || (freq === bestN && n < best)) { best = n; bestN = freq; }
+  }
+  return Math.max(1, Math.min(best, 12));
+}
+function splitToColumns(line, cols) {
+  const parts = line.replace(/\s+/g, " ").trim().split(" ");
+  if (parts.length <= cols) { const a = parts.slice(0, cols); while (a.length < cols) a.push(""); return a; }
+  const a = parts.slice(0, cols - 1);
+  a.push(parts.slice(cols - 1).join(" "));   // overflow stays in the last cell
+  return a;
+}
+function padGrid(rows) {
+  const maxC = Math.max(1, ...rows.map(r => r.length));
+  const padded = rows.map(r => { const a = r.slice(0, maxC); while (a.length < maxC) a.push(""); return a.map(c => String(c).trim()); });
+  const headers = padded[0].map((h, i) => (h !== "" ? h : "Column " + (i + 1)));
+  const data = padded.length === 1 ? [new Array(headers.length).fill("")] : padded.slice(1);
+  return { headers, data };
+}
+function ocrTextToTable(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n")
+    .map((l) => l.replace(/\s+$/, ""))
+    .filter((l) => l.trim() !== "");
+  if (!lines.length) return { headers: ["Column 1"], data: [[""]], confidence: 0 };
+
+  // Strategy A: explicit delimiter (tab, pipe, or 2+ spaces) → split on the strongest present.
+  if (lines.some((l) => l.includes("\t") || /\s{2,}\S/.test(l) || l.includes("|"))) {
+    const rows = lines.map((l) => {
+      if (l.includes("\t")) return l.split("\t").map(s => s.trim());
+      if (/\s{2,}\S/.test(l)) return l.trim().split(/\s{2,}/).map(s => s.trim());
+      if (l.includes("|")) { const p = l.split("|").map(s => s.trim()); while (p.length && p[p.length - 1] === "") p.pop(); while (p.length && p[0] === "") p.shift(); return p.length ? p.map(s=>s.trim()) : [l.trim()]; }
+      return [l.trim()];
+    });
+    const g = padGrid(rows);
+    return { headers: g.headers, data: g.data, confidence: 0.9, strategy: "delimiter" };
+  }
+
+  // Strategy B: whitespace grid — columns = most-common word count.
+  const cols = ocrColumnCount(lines);
+  const rows = lines.map((l) => splitToColumns(l, cols));
+  const within = lines.filter((l) => (l.replace(/\s+/g, " ").trim().split(" ").length >= cols)).length;
+  const exact = lines.filter((l) => (l.replace(/\s+/g, " ").trim().split(" ").length === cols)).length;
+  const confidence = Math.round(((within * 0.4 + exact * 0.6) / lines.length) * 100) / 100;
+  const g = padGrid(rows);
+  return { headers: g.headers, data: g.data, confidence, strategy: "word" };
+}
+
+async function ocrFromFile(file) {
+  if (!file) return;
+  if (!/^image\/(png|jpe?g|webp|bmp)$/i.test(file.type || "")) {
+    showToast("That doesn't look like an image (PNG / JPG / WebP supported)", "error");
+    return;
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    showToast("Photo is over 15 MB — please use a smaller image", "error");
+    return;
+  }
+  showToast("Loading OCR engine (first run downloads it, ~few MB)…");
+  try {
+    const base = (filenameInput && filenameInput.value.trim()) || "untitled";
+    let progress;
+    const text = await ocrImageToText(file, () => {
+      // Keep the toast honest about stage without spamming.
+    });
+    if (!text || text.trim() === "") {
+      showToast("No readable text found in that image", "error");
+      return;
+    }
+    const { headers, data, confidence } = ocrTextToTable(text);
+    // Reuse the existing replace flow (with confirm if there's data).
+    const doLoad = () => {
+      applyLoaded(headers, data);
+      if (filenameInput) filenameInput.value = base + "-ocr";
+      showToast(`Recognised ${data.length} row${data.length === 1 ? "" : "s"} (≈${confidence === undefined ? "" : Math.round((confidence||0)*100)}% confidence) — check the grid`);
+    };
+    if (state.rows.some(r => r.some(c => c !== ""))) {
+      confirmAction("Load OCR result?", "This replaces the current grid with " + data.length + " recognised row(s).", doLoad);
+    } else {
+      doLoad();
+    }
+  } catch (err) {
+    showToast("OCR failed: " + ((err && err.message) || err), "error");
+  }
+}
+const ocrInput = $("ocrInput");
+if (ocrInput) ocrInput.addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (f) ocrFromFile(f);
 });
 
 function toolTrim() {
@@ -4322,6 +4474,345 @@ function exportXlsx() {
   showToast(`Exported ${name}.xlsx`);
 }
 
+/* ============ Shareable HTML report ============
+   Produce a single-file HTML report from the current grid state.
+
+   Design rules:
+   - Zero external requests (inline CSS).
+   - Zero JavaScript (static HTML).
+   - Escapes everything (same `esc` helper).
+   - Classifies each cell for right-align/tabular-figures.
+   - Truncates to REPORT_MAX_ROWS with a visible badge.
+   - Includes an optional static SVG bar chart when there's a natural
+     label + numeric pairing; falls back silently otherwise.
+   - Footer marks ownership ("Generated by Sheetlet · data never left your
+     machine") so the file is recognisably private. */
+
+const REPORT_MAX_ROWS = 500;
+const REPORT_MAX_LABELS = 15;
+
+function reportCellText(r, c) {
+  const v = state.rows[r] && state.rows[r][c];
+  const raw = (v === undefined || v === null) ? "" : String(v);
+  if (raw.trim().charAt(0) !== "=") return raw;
+  const rv = resolveCell(r, c);
+  if (rv.e) return rv.e.text;
+  if (rv.n !== null && rv.n !== undefined) return String(rv.n);
+  if (rv.text !== undefined) return rv.text;
+  return raw;
+}
+function reportCellClass(r, c) {
+  const v = state.rows[r] && state.rows[r][c];
+  const raw = (v === undefined || v === null) ? "" : String(v);
+  if (raw.trim() === "") return "";
+  let s = raw;
+  if (raw.trim().charAt(0) === "=") {
+    const rv = resolveCell(r, c);
+    if (rv.e) return "rtx";
+    if (rv.n !== null) s = String(rv.n);
+    else if (rv.text !== undefined) s = rv.text;
+  }
+  s = s.trim();
+  const ti = typeInfo(s);
+  if (ti.type === "number" || ti.type === "percent" || ti.type === "currency") return "rnum";
+  if (ti.type === "boolean") return "rbool";
+  if (ti.type === "date" || ti.type === "datetime" || ti.type === "time") return "rdate";
+  return "rtx";
+}
+function reportSummary() {
+  const rows = state.rows.length, cols = state.headers.length;
+  // Classify each column using `columnType`.
+  const typeCounts = { text:0, number:0, date:0, boolean:0, mixed:0, empty:0 };
+  for (let c = 0; c < cols; c++) {
+    const t = columnType(c);
+    typeCounts[t.type] = (typeCounts[t.type] || 0) + 1;
+  }
+  // Whole-grid stats.
+  let all = { sum: null, avg: null, min: null, max: null, numCount: 0 };
+  if (rows && cols) {
+    all = computeStats(0, 0, rows - 1, cols - 1);
+    if (!all.hasNum) all = { sum: null, avg: null, min: null, max: null, numCount: 0 };
+  }
+  return { rows, cols, typeCounts, all };
+}
+function reportColumnBadges() {
+  if (!state.headers.length) return "";
+  const cells = state.headers.map((h, c) => {
+    const t = columnType(c);
+    // Use the object's own label/cls/title rather than our custom labels.
+    const badge = {
+      number:  ["Number", "b-num"],
+      date:    ["Date",   "b-date"],
+      text:    ["Text",   "b-txt"],
+      boolean: ["Bool",   "b-bool"],
+      mixed:   ["Mixed",  "b-mixed"],
+      empty:   ["Empty",  "b-txt"],
+    }[t.type] || [t.type, "b-txt"];
+    return `<div class="rc-col" title="${esc(h)}">
+      <div class="rc-label">${esc(h || "Column " + (c + 1))}</div>
+      <span class="rc-badge ${badge[1]}">${badge[0]}</span>
+    </div>`;
+  }).join("");
+  return `<details class="rc-cols" open>
+    <summary>Columns</summary><div class="rc-cols-grid">${cells}</div>
+  </details>`;
+}
+function buildReportTable() {
+  if (!state.headers.length || !state.rows.length) {
+    return `<div class="rp-empty">No data to display.</div>`;
+  }
+  const cols = state.headers.length;
+  const totalRows = state.rows.length;
+  const shown = Math.min(totalRows, REPORT_MAX_ROWS);
+  const truncated = totalRows > REPORT_MAX_ROWS;
+
+  // Header row
+  let html = `<table><thead><tr><th class="tn">#</th>`;
+  for (let c = 0; c < cols; c++) {
+    html += `<th>${esc(state.headers[c] || "Column " + (c + 1))}</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+
+  // Data rows (truncated)
+  for (let r = 0; r < shown; r++) {
+    html += `<tr><td class="tn">${r + 1}</td>`;
+    const row = state.rows[r];
+    for (let c = 0; c < cols; c++) {
+      const v = row && row[c];
+      const txt = reportCellText(r, c);
+      const cls = reportCellClass(r, c) || "rtxt";
+      html += `<td class="${cls}">${esc(txt)}</td>`;
+    }
+    html += `</tr>`;
+  }
+
+  html += `</tbody></table>`;
+  if (truncated) {
+    html += `<div class="rp-truncated">Showing first ${REPORT_MAX_ROWS.toLocaleString()} of ${totalRows.toLocaleString()} rows. Export to CSV/Excel for the full dataset.</div>`;
+  }
+  return html;
+}
+function buildReportBarChart() {
+  // Find a natural label/value pairing. Rules of thumb:
+  //   - prefer the first column of type "text" as labels, paired with
+  //     the first numeric column;
+  //   - else fall back to (row number, first numeric col) if there's one.
+  if (!state.rows.length || !state.headers.length) return "";
+  const rows = state.rows.length, cols = state.headers.length;
+  let labelCol = -1, numCol = -1;
+  // Pass 1: (text col, number col)
+  for (let c = 0; c < cols; c++) if (columnType(c).type === "number" && numCol === -1) numCol = c;
+  for (let c = 0; c < cols; c++) if (columnType(c).type === "text"   && labelCol === -1) labelCol = c;
+  if (numCol === -1) return "";
+  const data = [];
+  for (let r = 0; r < rows; r++) {
+    const raw = state.rows[r][numCol];
+    if (raw === undefined || raw === null) continue;
+    const s = String(raw).trim();
+    let n;
+    if (s.charAt(0) === "=") {
+      const rv = resolveCell(r, numCol);
+      if (rv.e || rv.n === null) continue;
+      n = rv.n;
+    } else {
+      const ti = typeInfo(s);
+      if (ti.type !== "number" && ti.type !== "percent" && ti.type !== "currency") continue;
+      n = ti.value;
+    }
+    if (!isFinite(n)) continue;
+    const lbl = labelCol >= 0 ? String(state.rows[r][labelCol] ?? "").trim() || ("#" + (r + 1)) : ("#" + (r + 1));
+    data.push({ label: lbl, value: n });
+  }
+  if (!data.length) return "";
+  data.sort((a, b) => b.value - a.value);
+  if (data.length > REPORT_MAX_LABELS) data.length = REPORT_MAX_LABELS;
+  const maxAbs = Math.max(...data.map(d => Math.abs(d.value)), 1e-9);
+  const barH = 18, gap = 6;
+  const labelW = 160, barW = 320, valueW = 80;
+  const W = labelW + barW + valueW + 24, H = data.length * (barH + gap) + 12;
+  const fmt = (x) => Number.isInteger(x) ? x.toLocaleString() : x.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  let inner = "";
+  data.forEach((d, i) => {
+    const w = Math.max(3, Math.round((Math.abs(d.value) / maxAbs) * (barW - 4)));
+    const y = 6 + i * (barH + gap);
+    const sign = d.value < 0 ? "−" : "";
+    inner += `<text class="rc-lab" x="${labelW - 8}" y="${y + barH - 6}" text-anchor="end">${esc(d.label.slice(0, 22))}</text>`;
+    inner += `<rect x="${labelW}"  y="${y}" width="${w}" height="${barH}" rx="3" class="rc-bar"/>`;
+    inner += `<text class="rc-val" x="${labelW + barW + 8}" y="${y + barH - 6}">${sign}${fmt(Math.abs(d.value))}</text>`;
+  });
+  const src = (labelCol >= 0 ? state.headers[labelCol] : "#") + " × " + state.headers[numCol];
+  return `<section class="rchart">
+    <div class="rchart-head">
+      <h4>Top ${data.length} by ${esc(state.headers[numCol])}</h4>
+      <span class="dim">label: ${esc(labelCol >= 0 ? state.headers[labelCol] : "row #")}</span>
+    </div>
+    <svg class="rchart-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Bar chart: ${esc(src)}">
+      ${inner}
+    </svg>
+  </section>`;
+}
+function buildReport() {
+  const s = reportSummary();
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 16).replace("T", " · ");
+  const name  = (filenameInput && filenameInput.value.trim()) || "untitled";
+  const title = "Report · " + name;
+
+  const card = (lbl, val, hint) => `<div class="rcard">
+    <div class="rcard-l">${esc(lbl)}</div>
+    <div class="rcard-v">${val ?? "—"}</div>
+    ${hint ? `<div class="rcard-h">${esc(hint)}</div>` : ""}
+  </div>`;
+  const cards = [
+    card("Rows",  s.rows ? s.rows.toLocaleString() : "—"),
+    card("Columns", s.cols ? s.cols.toLocaleString() : "—"),
+    card("Numeric cols", s.typeCounts.number || 0, "detected by type"),
+    card("Text cols", s.typeCounts.text || 0),
+    card("Σ Sum", s.all.sum !== null ? Math.round(s.all.sum * 1e6) / 1e6 : "—", "whole grid"),
+    card("x̄ Avg", s.all.avg !== null ? Math.round(s.all.avg * 1e6) / 1e6 : "—"),
+  ].join("");
+
+  const chart = buildReportBarChart();
+  const table = buildReportTable();
+  const cols  = reportColumnBadges();
+
+  const CSS = [
+    "*{box-sizing:border-box}",
+    "body{margin:0;padding:28px;background:#f0f2f8;color:#161c2c;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.45;font-size:14px}",
+    ".wrap{max-width:1080px;margin:0 auto}",
+    "header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}",
+    "h1{margin:0 0 4px;font-size:22px;font-weight:600;letter-spacing:-.2px}",
+    ".stamp,.byline{color:#6a7490;font-size:12.5px}",
+    ".accent{display:inline-block;width:6px;height:22px;border-radius:3px;background:#107c41;margin-right:12px;vertical-align:-4px}",
+    ".cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:18px 0 22px}",
+    ".rcard{background:#fff;border:1px solid #e3e6ee;border-radius:12px;padding:12px 14px}",
+    ".rcard-l{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:#8b93a8}",
+    ".rcard-v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:4px}",
+    ".rcard-h{font-size:11px;color:#8b93a8;margin-top:2px}",
+    "section{background:#fff;border:1px solid #e3e6ee;border-radius:12px;padding:16px 18px;margin-bottom:18px}",
+    "h3{margin:0 0 12px;font-size:15px;font-weight:600}",
+    "h4{margin:0;font-size:13.5px;font-weight:600}",
+    ".rc-cols{background:#fafafa;border:1px solid #e3e6ee;border-radius:10px;padding:12px 14px;margin-bottom:18px}",
+    ".rc-cols summary{font-weight:600;font-size:12.5px;color:#545e75;cursor:pointer;outline:none}",
+    ".rc-cols[open] summary{margin-bottom:10px}",
+    ".rc-cols-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px 12px}",
+    ".rc-col{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:#fff;border:1px solid #e8ebf1;border-radius:8px}",
+    ".rc-label{font-size:12.5px;font-weight:500;color:#161c2c;word-break:break-word}",
+    ".rc-badge{align-self:flex-start;font-size:10.5px;font-weight:600;letter-spacing:.4px;padding:2px 7px;border-radius:999px;",
+    "background:#eef2f8;color:#545e75}",
+    ".rc-badge.b-num{background:#e2f0e8;color:#0e6f3c}",
+    ".rc-badge.b-date{background:#fff2e2;color:#8a5a1c}",
+    ".rc-badge.b-bool{background:#eceeff;color:#3d41bd}",
+    ".rc-badge.b-txt{background:#eef2f8;color:#545e75}",
+    ".rc-badge.b-mixed{background:#fbe6ea;color:#9c2836}",
+    ".rchart-svg text{font-family:inherit;font-size:11px}",
+    ".rchart-svg .rc-lab{fill:#545e75}",
+    ".rchart-svg .rc-val{fill:#161c2c;font-weight:600;font-variant-numeric:tabular-nums}",
+    ".rchart-svg .rc-bar{fill:#107c41;opacity:.88}",
+    "table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;font-variant-numeric:tabular-nums}",
+    "th,td{padding:7px 10px;border-bottom:1px solid #eef0f5;text-align:left}",
+    "th{background:#f4f6f9;font-weight:600;color:#545e75;font-size:11.5px;letter-spacing:.4px;text-transform:uppercase;position:sticky;top:0;z-index:1}",
+    ".tn{text-align:right;color:#545e75;font-weight:600;min-width:60px;position:sticky;left:0;background:#f4f6f9}",
+    "td.rnum{text-align:right;font-variant-numeric:tabular-nums}",
+    "td.rbool{font-weight:600;color:#3d41bd;background:#f4f5fe;border-radius:4px}",
+    "td.rdate{color:#545e75;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px}",
+    "tr:nth-child(even) td{background:#fafbfc}",
+    ".rp-truncated{font-size:12.5px;color:#8b93a8;padding:8px 2px 0}",
+    "footer{margin-top:24px;padding-top:16px;border-top:1px solid #e3e6ee;color:#6a7490;font-size:12.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}",
+    "code{background:#eef2f8;padding:1px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px}",
+    "@media (max-width:760px){.cards{grid-template-columns:repeat(3,1fr)}.wrap{padding:20px}}",
+    "@media (prefers-color-scheme: dark){",
+    "body{background:#0e1220;color:#e6e8f1}",
+    ".rcard,.rc-col,section{background:#161b2b;border-color:#20263c}",
+    ".rc-lb,.rc-cols,.rc-cols[open] summary,.rcard,.cards,.rc-col,.tn,.stamp,.byline,.dim{color:#94a0c8}",
+    ".rcard-l,.rc-label{color:#e6e8f1}",
+    "th,.tn{background:#1e2436;color:#94a0c8}",
+    "th{color:#b7c1e0}",
+    ".rc-badge{background:#20263c;color:#b7c1e0}",
+    ".rc-badge.b-num{background:#14301f;color:#54d79a}",
+    ".rc-badge.b-date{background:#33240f;color:#eab765}",
+    ".rc-badge.b-bool{background:#20285a;color:#a3b0ff}",
+    "td,.rc-lab,.rc-val,.rc-label{color:#e6e8f1}",
+    "tr:nth-child(even) td{background:#1a2032}",
+    "td.rbool{background:#20285a;color:#a3b0ff}",
+    "td.rdate{color:#94a0c8}",
+    "code{background:#232a40;color:#e6e8f1}",
+    ".rchart-svg .rc-lab{fill:#94a0c8}",
+    ".rchart-svg .rc-val{fill:#e6e8f1}",
+    ".rp-empty,.rp-truncated{color:#94a0c8}",
+    "header h1,.rcard-v,.rc-lab{color:#e6e8f1}",
+    "}" ,
+    "footer{color:#94a0c8}",
+    "@media (prefers-color-scheme: dark){footer{color:#94a0c8}hr,.stamp,.byline,.dim,footer .b1,footer .b2{color:#94a0c8}}",
+    "@media print{body{background:#fff;color:#161c2c;padding:0}th,td{print-color-adjust:exact;-webkit-print-color-adjust:exact}}",
+  ].join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="en" data-sheetlet-report="1">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${esc(title)}</title>
+<style>
+${CSS}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1><span class="accent" aria-hidden="true"></span>${esc(title)}</h1>
+      <div class="stamp">${esc(stamp)} &nbsp;·&nbsp; ${s.rows} rows × ${s.cols} cols</div>
+    </div>
+    <div class="byline">Generated by <strong>Sheetlet</strong></div>
+  </header>
+
+  <div class="cards">${cards}</div>
+
+  <section>
+    ${cols}
+    ${chart}
+    <h3>Data <span class="dim" style="font-weight:400;color:#8b93a8;font-size:12.5px;margin-left:8px">(whole grid)</span></h3>
+    ${table}
+  </section>
+
+  <footer>
+    <div>
+      <div class="b1">Sheets are yours — data never left your machine to build this file.</div>
+      <div class="b2">Open a cell or column and it will look the way you typed it. Numbers stay right-aligned,
+        booleans are blue, dates in a monospace column.</div>
+    </div>
+    <div>
+      <code>Sheetlet · sheetlet.app</code><br/>
+      <span class="dim">Single file · no cookies · no tracking · no analytics</span>
+    </div>
+  </footer>
+</div>
+</body>
+</html>
+`;
+  return html;
+}
+function downloadReport() {
+  if (!state.rows.length || !state.headers.length) {
+    showToast("Nothing to report — open some data first", "error");
+    return;
+  }
+  const html = buildReport();
+  const name = (filenameInput && filenameInput.value.trim() || "untitled").replace(/\.[^.]+$/, "");
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name + "-report.html";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  markSaved();
+  showToast(`Exported ${name}-report.html`);
+}
+
 /* ============ Sample data ============ */
 function loadSample() {
   const headers = ["Name", "Department", "Salary", "Joined", "Location"];
@@ -4424,6 +4915,10 @@ Object.defineProperty(window, "__sheetlet", {
     loadFile, loadExcelFile, excelToGrid,
     exportAoa, exportXlsx, exportCellValue,
     xlsxSupported,
+    // Shareable HTML report (feature #3)
+    buildReport, buildReportTable, buildReportBarChart, reportSummary, reportColumnBadges, reportCellText, reportCellClass, downloadReport,
+    // OCR: photo → table (feature #5)
+    loadTesseract, ocrImageToText, ocrTextToTable, ocrColumnCount, splitToColumns, padGrid, ocrFromFile, ocrSupported,
     fillDown, fillRight, applyCase,
     copySelectionRange, selectedRangeTsv,
     findNext, doReplace, openFind, closeFind,

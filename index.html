@@ -75,6 +75,7 @@
             <button type="button" data-delim="tab">TSV <span class="dim">(tab)</span></button>
             <div class="menu-gap"></div>
             <button type="button" data-delim="xlsx">Excel <span class="dim">(.xlsx)</span></button>
+            <button type="button" data-delim="report">HTML report <span class="dim">(.html)</span></button>
           </div>
         </div>
 
@@ -90,6 +91,16 @@
             <button type="button" data-copyas="sql">SQL <span class="dim">(INSERT)</span></button>
           </div>
         </div>
+        <span class="sep"></span>
+        <button id="btnReport" class="btn" title="Export a shareable single-file HTML report (table + summary)" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>Report</span>
+        </button>
+        <label class="btn" id="btnOcrWrap" title="Scan text from a photo/screenshot (OCR) into the grid" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <span>Photo → table</span>
+          <input id="ocrInput" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/bmp" hidden />
+        </label>
       </div>
     </header>
 

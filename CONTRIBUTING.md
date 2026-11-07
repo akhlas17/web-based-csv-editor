@@ -28,10 +28,13 @@ we have few rules. The goal is to keep it easy to read, easy to run, and fast.
 
 ## What we probably won't merge
 
-- A build tool (Vite, webpack, TS, React, …) or any *runtime* dependency. SheetJS
-  (for Excel `.xlsx` interop) is the only committed third‑party file and it is
-  vendored directly into the repo — no `npm install`, no bundler, no lock file.
-  If you feel you need anything else, open an issue first and we'll discuss it.
+ - A build tool (Vite, webpack, TS, React, …) or any *runtime* dependency. SheetJS
+   (for Excel `.xlsx` interop) is the only committed third‑party file and it is
+   vendored directly into the repo — no `npm install`, no bundler, no lock file.
+   If you feel you need anything else, open an issue first and we'll discuss it.
+   Tesseract.js (OCR) is a deliberate exception: it's **lazy‑loaded from a CDN
+   only on first use**, not a build or runtime dependency, and the app must keep
+   working if that download is unavailable.
 - Feature bloat — a spreadsheet with tabs, macros, and so on. Keep it a focused
   spreadsheet editor (CSV + Excel in, spreadsheet out).
 - Changes that make the file count go up. Prefer editing the existing files.
@@ -41,7 +44,8 @@ we have few rules. The goal is to keep it easy to read, easy to run, and fast.
 There is no build step to keep green, but there *is* a small browser test suite
 in `tests/`. It drives the real app over Playwright (a dev-only tool) and asserts
 observable behaviour — editing, undo, the filter panel, Backspace, index‑remap,
-Excel, and accessibility.
+Excel, accessibility, the **HTML report** builder, and the **OCR text→table**
+heuristic.
 
 ```bash
 npm i -g playwright && npx playwright install chromium   # once

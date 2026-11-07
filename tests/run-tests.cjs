@@ -13,6 +13,8 @@ const TESTS = [
   "index-remap.test.cjs",
   "excel.test.cjs",
   "a11y.test.cjs",
+  "report.test.cjs",
+  "ocr.test.cjs",
 ];
 
 (async () => {

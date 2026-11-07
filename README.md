@@ -3,8 +3,14 @@
 A fast, privacy‑first **spreadsheet editor** for the browser. Open CSV or Excel
 files (`.csv` / `.xlsx` / `.xls` / `.tsv`), work on them like a real spreadsheet,
 and save them back — no account, no server, no build step.
-Everything runs locally in your browser; **your data never leaves your machine**
-(the only network request is an optional web font).
+Everything runs locally in your browser; **your data never leaves your machine**.
+
+> **The one exception, made explicit:** the **Photo → table** (OCR) feature loads
+> [Tesseract.js](https://github.com/naptha/tesseract.js) from a CDN the *first* time
+> you use it, and Tesseract processes your image in your browser. That OCR path is
+> the only part of the app that touches a network. Everything else — editing,
+> formulas, Excel import/export, and the one‑click **HTML report** — happens fully
+> offline. (There is also an optional web font for the UI.)
 
 ```
 index.html   →  the page shell
@@ -18,6 +24,11 @@ That's the whole app. **No build step and no runtime dependencies** — open `in
 and it runs. The only third‑party file is SheetJS, committed straight into the repo so
 there is nothing to install. (There *is* a minimal `package.json`, but it exists only
 to describe the optional test runner in `tests/`; the app never uses it.)
+
+> **One network dependency, disclosed:** the **Photo → table** (OCR) feature loads
+> [Tesseract.js](https://github.com/naptha/tesseract.js) from a CDN the *first* time
+> you use it. That OCR pass is the only part of the app that touches a network —
+> everything else, including the one‑click **HTML report**, runs fully offline.
 
 ## Keyboard‑driven
 
@@ -55,6 +66,13 @@ Then open a file (or drop it onto the window) and you're editing.
 
 - **Open** CSV / Excel files (`.csv`, `.xlsx`, `.xls`, `.tsv`) by picking one,
   dragging one in, or pasting (CSV/TSV) from the clipboard
+- **Open a photo as a table** (OCR) — hit **📷 Photo → table** on the toolbar and
+  choose a PNG/JPEG/WebP screenshot or photo of a table. Tesseract.js (loaded lazily
+  from a CDN on first use) reads the text out in your browser, and a heuristic
+  splits it into rows and columns — tab/pipe/whitespace layouts and plain word grids.
+  The result lands in the grid and is **fully editable** before you keep working.
+  This is the only feature that touches a network (the Tesseract download); your
+  image is processed in the browser and never uploaded
 - **Edit like a spreadsheet**
   - `Enter` / `Space` — start (or move-edit) the active cell
   - `Tab` / `Shift+Tab` — move to the next / previous cell
@@ -138,6 +156,12 @@ Then open a file (or drop it onto the window) and you're editing.
 - **Export** to `.csv` (button, or `Ctrl/Cmd+S`) or to **Excel `.xlsx`** from the
   **Export** menu — numbers, booleans and computed formula values are written as
   native Excel cells (summable); **Open** also reads `.xlsx` / `.xls` straight back in
+- **Share as a report** — the **Report** button (or **Export ▸ HTML report**)
+  produces a **single self‑contained `.html` file** with a snapshot of the current
+  grid: a summary (rows, columns, types, per‑column stats), per‑column type badges,
+  a lightweight **SVG bar chart** for any numeric column, and a data table. It has
+  **zero external assets and zero JavaScript** — send the file anywhere and it
+  renders identically offline, and it's stamped *"data never left your machine"*
 - **Big files stay fast** — DOM virtualization keeps the grid responsive at tens of
   thousands of rows, and parsing runs in a Web Worker so the UI never freezes
 
@@ -146,7 +170,9 @@ Then open a file (or drop it onto the window) and you're editing.
 The app ships with a small sample dataset so you can feel the keyboard flow
 immediately. Press `Enter` on any cell, `Tab` through it, sort a column, then hit
 `Ctrl/Cmd+S` to save as CSV — or open the **Export** menu to write `.csv`, `.tsv`,
-or Excel `.xlsx` (and to open an `.xlsx` file back in).
+or Excel `.xlsx` (and to open an `.xlsx` file back in). Hit **Report** to grab a
+portable single‑file HTML snapshot, or **📷 Photo → table** to turn a picture of a
+table into an editable grid.
 
 ## How it works (and how to extend it)
 
@@ -171,7 +197,8 @@ inspect state while you work. There is no build step to keep green.
 There is no build step to keep green, so the tests are a thin browser harness in
 `tests/` — they drive the *real* app (served locally with `python3 -m http.server`)
 through Playwright and assert on observable behaviour: edit/undo, the filter panel,
-Backspace handling, index‑remap, Excel round‑trip, and accessibility.
+Backspace handling, index‑remap, Excel round‑trip, accessibility, the one‑click
+**HTML report** builder, and the **OCR text→table** heuristic.
 
 ```bash
 # one‑time setup (Playwright is a dev-only tool; the app itself still has no deps)
