@@ -4917,6 +4917,8 @@ Object.defineProperty(window, "__sheetlet", {
     xlsxSupported,
     // Shareable HTML report (feature #3)
     buildReport, buildReportTable, buildReportBarChart, reportSummary, reportColumnBadges, reportCellText, reportCellClass, downloadReport,
+    // A test-only loader: push headers/data straight into the grid (skips file parse + confirm).
+    applyLoaded,
     // OCR: photo → table (feature #5)
     loadTesseract, ocrImageToText, ocrTextToTable, ocrColumnCount, splitToColumns, padGrid, ocrFromFile, ocrSupported,
     fillDown, fillRight, applyCase,

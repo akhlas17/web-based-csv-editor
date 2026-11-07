@@ -75,6 +75,60 @@ async function test(H, ctx) {
         const els = [...document.querySelectorAll(".btn, .topbar button, .topbar label")];
         return els.some((el) => /Photo|OCR|table/i.test(el.title || el.textContent || ""));
       }));
+
+    // ---- End-to-end OCR flow with a fake Tesseract (no network, no real engine) ----
+    // Install a page-level Tesseract shim BEFORE we dispatch the file input, so
+    // loadTesseract() picks it up instead of fetching the CDN.
+    await page.evaluate(() => {
+      window.Tesseract = {
+        _ours: true,
+        createWorker: async () => ({
+          recognize: async () => ({ data: { text: "Name\tQty\nApple\t12\nBanana\t30" } }),
+          terminate: async () => {},
+        }),
+      };
+    });
+    // Real File (5-byte PNG header) so `file.type` passes the guard and the
+    // ocrInput change handler sees a non-empty FileList.
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await page.setInputFiles("#ocrInput", { name: "f.png", mimeType: "image/png", buffer: pngHeader });
+
+    // The sample grid is non-empty at init, so `ocrFromFile` must confirm before replacing.
+    await page.waitForFunction(() => {
+      const m = document.getElementById("modalRoot");
+      return m && !m.hidden;
+    }, { timeout: 10_000 }).catch(() => {});
+    const modalVisible = await page.evaluate(() => {
+      const m = document.getElementById("modalRoot");
+      return m && !m.hidden;
+    });
+    H.pass("OCR confirms before replacing a non-empty grid", modalVisible === true);
+    if (modalVisible) {
+      await page.evaluate(() => document.getElementById("modalOk").click());
+    }
+
+    const after = await page.evaluate(() => ({
+      headers: window.__sheetlet.state.headers,
+      dataLen: window.__sheetlet.state.rows.length,
+      row0: window.__sheetlet.state.rows[0],
+      row1: window.__sheetlet.state.rows[1],
+      filename: document.getElementById("filename").value,
+      toastText: document.getElementById("toast").textContent,
+      fakeStillPresent: !!(window.Tesseract && window.Tesseract._ours),
+    }));
+    H.pass("OCR populates state.headers with [Name, Qty]",
+      JSON.stringify(after.headers) === '["Name","Qty"]', JSON.stringify(after.headers));
+    H.pass("OCR populates state.rows with the two data rows, values intact",
+      after.dataLen === 2 &&
+      (after.row0 || []).join("\t") === "Apple\t12" &&
+      (after.row1 || []).join("\t") === "Banana\t30",
+      JSON.stringify({ row0: after.row0, row1: after.row1 }));
+    H.pass("OCR rewrites the filename with an -ocr suffix", /-ocr$/.test(after.filename), "fn=" + after.filename);
+    H.pass("OCR shows a success toast with row count + confidence",
+      /Recognised 2 rows/.test(after.toastText) && /confidence/i.test(after.toastText),
+      "toast=" + after.toastText);
+    H.pass("OCR used the page's (fake) Tesseract, not the CDN (no network fetch)",
+      after.fakeStillPresent === true);
   } finally {
     await page.close().catch(() => {});
   }

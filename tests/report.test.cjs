@@ -62,6 +62,23 @@ async function test(H, ctx) {
       return name + "-report.html";
     });
     H.pass("downloadReport filename convention is <file>-report.html", /\.html$/.test(dl) && dl.includes("-report"), dl);
+
+    // Report truncation: a grid with 800 rows must be capped at 500, with a marker.
+    // (No restore needed — this page is closed in `finally`.)
+    await page.evaluate(() => {
+      window.__sheetlet.applyLoaded(["ID", "Value"], Array.from({ length: 800 }, (_, i) => [i, i * 10]));
+      document.getElementById("filename").value = "big.csv";
+    });
+    const bigHtml = await page.evaluate(() => window.__sheetlet.buildReport());
+    const bodyRows = (bigHtml.match(/<tr><td class="tn">/g) || []).length;
+    H.pass("report truncates rows to ≤ REPORT_MAX_ROWS (800 data rows → 500 shown)",
+      bodyRows === 500, "bodyRows=" + bodyRows);
+    H.pass("report marks the dataset as truncated with a visible badge",
+      /rp-truncated/.test(bigHtml) && /Showing first 500 of 800 rows/i.test(bigHtml));
+    H.pass("truncated report still self-contained (no CDN) + privacy byline",
+      !/<script[^>]+\ssrc=/i.test(bigHtml) && /data never left your machine/i.test(bigHtml));
+    H.pass("truncated report still renders an SVG bar chart",
+      /<svg[^>]*rchart/.test(bigHtml) && /class="rc-bar"/.test(bigHtml));
   } finally {
     await page.close().catch(() => {});
   }
